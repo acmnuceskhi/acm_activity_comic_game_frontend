@@ -35,6 +35,14 @@ jobs:
       - name: Install Vercel CLI
         run: npm install --global vercel@latest
       
+      - name: Verify Vercel Auth
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          vercel --version
+          # Explicitly verify auth with provided token to fail fast with a clear message
+          vercel whoami --token "$VERCEL_TOKEN"
+
       - name: Verify Vercel Token
         run: |
           if [ -z "${VERCEL_TOKEN}" ]; then
@@ -45,9 +53,9 @@ jobs:
       - name: Pull Vercel Environment Information
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: vercel pull --yes --environment=production
+        run: vercel pull --yes --environment=production --token "$VERCEL_TOKEN"
       
       - name: Deploy Project Artifacts to Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: vercel deploy --prebuilt --prod
+        run: vercel deploy --prebuilt --prod --token "$VERCEL_TOKEN"
