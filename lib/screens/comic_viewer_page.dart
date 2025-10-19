@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 // import 'dart:math' as math; // not needed
 import '../services/functions_api.dart';
 import '../services/music_player.dart';
+import 'package:vector_math/vector_math_64.dart' show Matrix4;
 
 class ComicViewerPage extends StatefulWidget {
   final String code;
@@ -34,8 +35,13 @@ class _ComicViewerPageState extends State<ComicViewerPage>
   late final Animation<double> _anim;
   bool _isAnimating = false;
   // int _animFromIdx = 0; // unused
-  int _animTargetIdx = 0;
+  // int _animTargetIdx = 0; // no longer used with translation-based rendering
   int _animDirection = 1; // 1 = next (from right), -1 = prev (from left)
+  // frame measurement for element placement
+  final GlobalKey _frameImageKey = GlobalKey();
+  double _frameW = 0, _frameH = 0, _frameLeft = 0, _frameTop = 0;
+  // cache intrinsic sizes for element images keyed by imageUrl
+  final Map<String, Size> _elemIntrinsicCache = {};
 
   @override
   void initState() {
@@ -113,26 +119,21 @@ class _ComicViewerPageState extends State<ComicViewerPage>
     if (_isAnimating) return;
     if (toIdx < 0 || toIdx >= frames.length) return;
     _isAnimating = true;
-    _animTargetIdx = toIdx;
     _animDirection = direction;
     // start playing target music so it overlaps with the animation
     try {
       final mid = frames[toIdx]['musicId'] as String?;
       globalMusicPlayer.play(mid);
     } catch (_) {}
-    _animController
-        .forward(from: 0)
-        .then((_) {
-          // commit the new index after animation
-          if (mounted) {
-            setState(() {
-              idx = toIdx;
-            });
-          }
-        })
-        .whenComplete(() {
-          _isAnimating = false;
+    _animController.forward(from: 0).then((_) {
+      // commit the new index after animation
+      if (mounted) {
+        setState(() {
+          idx = toIdx;
         });
+      }
+      _isAnimating = false;
+    });
   }
 
   Future<void> _showQuestionOverlayForFrame(dynamic frame) async {
@@ -257,45 +258,191 @@ class _ComicViewerPageState extends State<ComicViewerPage>
     }
   }
 
-  Widget _buildFrame(dynamic f) {
+  Widget _buildFrame(dynamic f, {Key? imageKey, bool elementsPlay = true}) {
     final imageUrl = f['imageUrl'] as String? ?? '';
-    return Container(
-      color: Colors.black,
-      alignment: Alignment.center,
-      child: imageUrl.isEmpty
-          ? const Text('No image', style: TextStyle(color: Colors.white))
-          : Image.network(
-              imageUrl,
-              fit: BoxFit.contain,
-              width: double.infinity,
-              height: double.infinity,
-              loadingBuilder: (context, child, loadingProgress) {
-                if (loadingProgress == null) return child;
-                return const Center(child: CircularProgressIndicator());
-              },
+    if (imageUrl.isEmpty) {
+      return Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        child: const Text('No image', style: TextStyle(color: Colors.white)),
+      );
+    }
+
+    // if elements exist, overlay them
+    final elements = (f['elements'] is List)
+        ? List.from(f['elements'] as List)
+        : [];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        // measure displayed frame size (BoxFit.contain) after layout
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final ctx = _frameImageKey.currentContext;
+          if (ctx != null) {
+            final size = ctx.size;
+            if (size != null) {
+              final newW = size.width;
+              final newH = size.height;
+              final newLeft = (w - newW) / 2.0;
+              final newTop = (h - newH) / 2.0;
+              if (newW != _frameW ||
+                  newH != _frameH ||
+                  newLeft != _frameLeft ||
+                  newTop != _frameTop) {
+                if (mounted)
+                  setState(() {
+                    _frameW = newW;
+                    _frameH = newH;
+                    _frameLeft = newLeft;
+                    _frameTop = newTop;
+                  });
+              }
+            }
+          }
+        });
+
+        // compute base size for elements. If imageKey is provided we may have
+        // accurate measured _frameW/_frameH; otherwise use constraints so overlay
+        // elements are positioned using local layout values (prevents jumps).
+        final base = (imageKey != null && _frameW > 0 && _frameH > 0)
+            ? (_frameW < _frameH ? _frameW : _frameH)
+            : (w < h ? w : h);
+
+        // compute image displayed size for this layout (BoxFit.contain behavior)
+        // If we have measured values for the real frame (imageKey != null) use them,
+        // otherwise approximate using base
+        final imgW = (imageKey != null && _frameW > 0) ? _frameW : base;
+        final imgH = (imageKey != null && _frameH > 0) ? _frameH : base;
+        final frameLeftLocal = (w - imgW) / 2.0;
+        final frameTopLocal = (h - imgH) / 2.0;
+
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              child: Center(
+                child: Image.network(
+                  imageUrl,
+                  key: imageKey,
+                  fit: BoxFit.contain,
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return const Center(child: CircularProgressIndicator());
+                  },
+                ),
+              ),
             ),
+            // overlay elements
+            for (final elRaw in elements)
+              if (elRaw is Map<String, dynamic>)
+                _buildElementOverlay(
+                  elRaw,
+                  base,
+                  elementsPlay,
+                  imgW,
+                  imgH,
+                  frameLeftLocal,
+                  frameTopLocal,
+                ),
+          ],
+        );
+      },
     );
   }
 
-  // Builds the animated overlay for the incoming page during the "throw" animation.
-  Widget _buildAnimatedOverlay(dynamic f) {
-    // animation value from 0.0 -> 1.0
-    final t = _anim.value;
-    // rotation: slight rotation depending on direction
-    final rot = (_animDirection * (1 - t) * 0.12); // radians
-    // translation: move from offscreen to center
-    final width = MediaQuery.of(context).size.width;
-    final dxStart = _animDirection * width;
-    final dx = dxStart * (1 - t);
+  Widget _buildElementOverlay(
+    Map<String, dynamic> el,
+    double base,
+    bool elementsPlay,
+    double imgW,
+    double imgH,
+    double frameLeftLocal,
+    double frameTopLocal,
+  ) {
+    // ensure we have intrinsic size cached (async). Use imageUrl as key.
+    final imageUrl = el['imageUrl'] as String? ?? '';
+    if (imageUrl.isNotEmpty && !_elemIntrinsicCache.containsKey(imageUrl)) {
+      _resolveIntrinsicForUrl(imageUrl);
+    }
+    // normalized position
+    final pos = el['position'] as Map<String, dynamic>? ?? {'x': 0.5, 'y': 0.5};
+    final nx = (pos['x'] is num) ? (pos['x'] as num).toDouble() : 0.5;
+    final ny = (pos['y'] is num) ? (pos['y'] as num).toDouble() : 0.5;
+    final elemScale = (el['scale'] is num)
+        ? (el['scale'] as num).toDouble()
+        : 0.2;
 
-    return Transform.translate(
-      offset: Offset(dx, 0),
-      child: Transform.rotate(
-        angle: rot,
-        child: Opacity(opacity: t.clamp(0.0, 1.0), child: _buildFrame(f)),
+    final maxDim = (elemScale * base).clamp(8.0, base);
+
+    double elemW, elemH;
+    final intrinsic = (_elemIntrinsicCache[imageUrl]);
+    if (intrinsic != null && intrinsic.width > 0 && intrinsic.height > 0) {
+      final aspect = intrinsic.width / intrinsic.height;
+      if (aspect >= 1.0) {
+        elemW = maxDim;
+        elemH = maxDim / aspect;
+      } else {
+        elemH = maxDim;
+        elemW = maxDim * aspect;
+      }
+    } else {
+      elemW = maxDim;
+      elemH = maxDim;
+    }
+
+    final centerX = (nx * imgW).clamp(elemW / 2.0, imgW - elemW / 2.0);
+    final centerY = (ny * imgH).clamp(elemH / 2.0, imgH - elemH / 2.0);
+    final left = frameLeftLocal + centerX - elemW / 2.0;
+    final top = frameTopLocal + centerY - elemH / 2.0;
+
+    return Positioned(
+      left: left,
+      top: top,
+      width: elemW,
+      height: elemH,
+      child: _AnimatedElement(
+        frameImageUrl: frames.isNotEmpty
+            ? frames[idx]['imageUrl'] as String? ?? ''
+            : '',
+        element: el,
+        frameW: _frameW,
+        frameH: _frameH,
+        elemW: elemW,
+        elemH: elemH,
+        play: elementsPlay,
       ),
     );
   }
+
+  void _resolveIntrinsicForUrl(String url) {
+    if (url.isEmpty) return;
+    final provider = NetworkImage(url);
+    final stream = provider.resolve(const ImageConfiguration());
+    stream.addListener(
+      ImageStreamListener(
+        (info, _) {
+          final iw = info.image.width.toDouble();
+          final ih = info.image.height.toDouble();
+          final prev = _elemIntrinsicCache[url];
+          if (prev == null || prev.width != iw || prev.height != ih) {
+            if (mounted) {
+              setState(() {
+                _elemIntrinsicCache[url] = Size(iw, ih);
+              });
+            }
+          }
+        },
+        onError: (e, s) {
+          // ignore resolution errors; fallback will be used
+          debugPrint('Failed to resolve intrinsic for $url: $e');
+        },
+      ),
+    );
+  }
+
+  // overlay method removed: rendering now uses translation-based stacking
 
   @override
   Widget build(BuildContext context) {
@@ -304,51 +451,364 @@ class _ComicViewerPageState extends State<ComicViewerPage>
       onKey: _onKey,
       child: Scaffold(
         appBar: AppBar(title: Text('Comic Viewer - ${widget.code}')),
-        body: Stack(
-          children: [
-            // base frame (current)
-            Positioned.fill(
-              child: frames.isEmpty
-                  ? const Center(child: Text('No frames'))
-                  : _buildFrame(frames[idx]),
-            ),
-            // animated incoming page overlay
-            if (_isAnimating && frames.length > _animTargetIdx)
-              Positioned.fill(
-                child: _buildAnimatedOverlay(frames[_animTargetIdx]),
-              ),
-            // left/right buttons for small screens
-            Positioned(
-              left: 8,
-              top: 0,
-              bottom: 0,
-              child: Visibility(
-                visible: MediaQuery.of(context).size.width < 600,
-                child: IconButton(
-                  iconSize: 48,
-                  color: Colors.white,
-                  icon: const Icon(Icons.arrow_left),
-                  onPressed: _handlePrev,
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final height = constraints.maxHeight;
+
+            if (frames.isEmpty) {
+              return const Center(child: Text('No frames'));
+            }
+
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                for (var i = 0; i < frames.length; i++)
+                  // each frame is a positioned full-size child translated horizontally
+                  Positioned.fill(
+                    child: Transform.translate(
+                      offset: Offset(
+                        // compute offset multiplier: (i - idx) shifted by animation progress
+                        (((i - idx) -
+                                (_isAnimating
+                                    ? _anim.value * _animDirection
+                                    : 0.0)) *
+                            width),
+                        0,
+                      ),
+                      child: Builder(
+                        builder: (ctx) {
+                          // compute a small rotation for incoming/outgoing pages
+                          const maxAngle = 0.12; // radians (~6.9deg)
+                          double angle = 0.0;
+                          if (_isAnimating) {
+                            final p = _anim.value; // 0 -> 1
+                            if (i == idx) {
+                              // outgoing page: rotate outwards
+                              angle = -_animDirection * p * maxAngle;
+                            } else if (i == idx + _animDirection) {
+                              // incoming page: rotate from angle -> 0
+                              angle = _animDirection * (1.0 - p) * maxAngle;
+                            }
+                          }
+
+                          return Transform.rotate(
+                            angle: angle,
+                            alignment: Alignment.center,
+                            child: SizedBox(
+                              width: width,
+                              height: height,
+                              child: _buildFrame(
+                                frames[i],
+                                // only keep the measured key on the currently settled frame
+                                imageKey: (!_isAnimating && i == idx)
+                                    ? _frameImageKey
+                                    : null,
+                                // only allow elements to play after translation finished and this is the active frame
+                                elementsPlay: (!_isAnimating && i == idx),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+
+                // small bottom-corner buttons for mobile (thumb-reachable)
+                Positioned(
+                  left: 12,
+                  bottom: 12,
+                  child: Visibility(
+                    visible: MediaQuery.of(context).size.width < 600,
+                    child: Material(
+                      color: Colors.black45,
+                      shape: const CircleBorder(),
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: _handlePrev,
+                        child: const SizedBox(
+                          width: 56,
+                          height: 56,
+                          child: Icon(
+                            Icons.arrow_left,
+                            color: Colors.white,
+                            size: 32,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            Positioned(
-              right: 8,
-              top: 0,
-              bottom: 0,
-              child: Visibility(
-                visible: MediaQuery.of(context).size.width < 600,
-                child: IconButton(
-                  iconSize: 48,
-                  color: Colors.white,
-                  icon: const Icon(Icons.arrow_right),
-                  onPressed: _handleNext,
+                Positioned(
+                  right: 12,
+                  bottom: 12,
+                  child: Visibility(
+                    visible: MediaQuery.of(context).size.width < 600,
+                    child: Material(
+                      color: Colors.black45,
+                      shape: const CircleBorder(),
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: _handleNext,
+                        child: const SizedBox(
+                          width: 56,
+                          height: 56,
+                          child: Icon(
+                            Icons.arrow_right,
+                            color: Colors.white,
+                            size: 32,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            if (_loading) const Center(child: CircularProgressIndicator()),
-          ],
+
+                if (_loading) const Center(child: CircularProgressIndicator()),
+              ],
+            );
+          },
         ),
+      ),
+    );
+  }
+}
+
+// Widget that plays element animations (Matrix4 sequences) and renders the transformed element image.
+
+class _AnimatedElement extends StatefulWidget {
+  final String frameImageUrl;
+  final Map<String, dynamic> element;
+  final double frameW;
+  final double frameH;
+  final double elemW;
+  final double elemH;
+  final bool play;
+
+  const _AnimatedElement({
+    required this.frameImageUrl,
+    required this.element,
+    required this.frameW,
+    required this.frameH,
+    required this.elemW,
+    required this.elemH,
+    this.play = true,
+    Key? key,
+  }) : super(key: key);
+
+  @override
+  State<_AnimatedElement> createState() => _AnimatedElementState();
+}
+
+class _AnimatedElementState extends State<_AnimatedElement>
+    with SingleTickerProviderStateMixin {
+  late List<Map<String, dynamic>> _animations;
+  int _index = 0;
+  late AnimationController _controller;
+  Matrix4 _current = Matrix4.identity();
+  Matrix4 _start = Matrix4.identity();
+  Matrix4 _target = Matrix4.identity();
+  double? _elemIntrinsicW;
+  double? _elemIntrinsicH;
+  // frame measurement fields not needed in this element player (kept in parent)
+
+  @override
+  void initState() {
+    super.initState();
+    final raw = widget.element['animation'];
+    if (raw is List) {
+      _animations = raw
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    } else {
+      _animations = [];
+    }
+    _controller = AnimationController(vsync: this);
+    _resolveElementIntrinsic();
+    if (_animations.isNotEmpty && widget.play) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _playNext());
+    }
+  }
+
+  void _resolveElementIntrinsic() {
+    final imgUrl = widget.element['imageUrl'] as String?;
+    if (imgUrl == null || imgUrl.isEmpty) return;
+    final provider = NetworkImage(imgUrl);
+    final stream = provider.resolve(const ImageConfiguration());
+    stream.addListener(
+      ImageStreamListener(
+        (info, _) {
+          final iw = info.image.width.toDouble();
+          final ih = info.image.height.toDouble();
+          if (_elemIntrinsicW != iw || _elemIntrinsicH != ih) {
+            if (mounted)
+              setState(() {
+                _elemIntrinsicW = iw;
+                _elemIntrinsicH = ih;
+              });
+          }
+        },
+        onError: (e, s) =>
+            debugPrint('Failed to resolve element image size: $e'),
+      ),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _AnimatedElement oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // If play toggles from false -> true, restart the element animation sequence
+    if (!oldWidget.play && widget.play) {
+      _startPlaying();
+    }
+    // If play was true and now false, stop current animation
+    if (oldWidget.play && !widget.play) {
+      try {
+        _controller.stop();
+      } catch (_) {}
+    }
+  }
+
+  void _startPlaying() {
+    if (_animations.isEmpty) return;
+    // reset to start
+    _index = 0;
+    _current = Matrix4.identity();
+    _start = Matrix4.identity();
+    _target = Matrix4.identity();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _playNext();
+    });
+  }
+
+  Matrix4 _matrixFromList(List<dynamic> l) {
+    final nums = l.map((e) => (e as num).toDouble()).toList();
+    return Matrix4(
+      nums[0],
+      nums[1],
+      nums[2],
+      nums[3],
+      nums[4],
+      nums[5],
+      nums[6],
+      nums[7],
+      nums[8],
+      nums[9],
+      nums[10],
+      nums[11],
+      nums[12],
+      nums[13],
+      nums[14],
+      nums[15],
+    );
+  }
+
+  void _playNext() {
+    if (_index >= _animations.length) return;
+    final a = _animations[_index];
+    final dur = (a['duration'] is num)
+        ? (a['duration'] as num).toDouble()
+        : ((a['seconds'] is num) ? (a['seconds'] as num).toDouble() : 1.0);
+    final matRaw = a['matrix'];
+    final txFrac = (a['translateX'] is num)
+        ? (a['translateX'] as num).toDouble()
+        : 0.0;
+    final tyFrac = (a['translateY'] is num)
+        ? (a['translateY'] as num).toDouble()
+        : 0.0;
+
+    // measure frame size if needed; try to read from ancestor frame image via widget.frameImageUrl measurement is optional
+    final imgW = (widget.frameW > 0) ? widget.frameW : 320.0;
+    final imgH = (widget.frameH > 0) ? widget.frameH : 320.0;
+    final tx = txFrac * imgW;
+    final ty = tyFrac * imgH;
+
+    if (matRaw is List && matRaw.length == 16) {
+      _start = _current.clone();
+      _target = _matrixFromList(matRaw);
+      if (tx != 0.0 || ty != 0.0) _target.translate(tx, ty);
+
+      _controller.duration = Duration(milliseconds: (dur * 1000).round());
+      _controller.reset();
+      _controller.addListener(_tick);
+      _controller.forward().whenComplete(() {
+        _controller.removeListener(_tick);
+        _current = _target.clone();
+        _index++;
+        if (_index < _animations.length) {
+          Future.delayed(const Duration(milliseconds: 100), _playNext);
+        }
+      });
+    } else if ((tx != 0.0 || ty != 0.0)) {
+      _start = _current.clone();
+      _target = Matrix4.identity();
+      _target.translate(tx, ty);
+      _controller.duration = Duration(milliseconds: (dur * 1000).round());
+      _controller.reset();
+      _controller.addListener(_tick);
+      _controller.forward().whenComplete(() {
+        _controller.removeListener(_tick);
+        _current = _target.clone();
+        _index++;
+        if (_index < _animations.length) {
+          Future.delayed(const Duration(milliseconds: 100), _playNext);
+        }
+      });
+    } else {
+      _index++;
+      if (_index < _animations.length)
+        Future.delayed(const Duration(milliseconds: 100), _playNext);
+    }
+  }
+
+  void _tick() {
+    final t = _controller.value;
+    setState(() {
+      _current = Matrix4.identity();
+      for (var r = 0; r < 4; r++) {
+        for (var c = 0; c < 4; c++) {
+          final s = _start.entry(r, c);
+          final e = _target.entry(r, c);
+          _current.setEntry(r, c, s + (e - s) * t);
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // compute display size based on intrinsic aspect (mirror admin logic)
+    final base = widget.elemW; // parent passed maxDim
+    double displayW = base;
+    double displayH = base;
+    if (_elemIntrinsicW != null &&
+        _elemIntrinsicH != null &&
+        _elemIntrinsicW! > 0 &&
+        _elemIntrinsicH! > 0) {
+      final aspect = _elemIntrinsicW! / _elemIntrinsicH!;
+      if (aspect >= 1.0) {
+        displayW = base;
+        displayH = base / aspect;
+      } else {
+        displayH = base;
+        displayW = base * aspect;
+      }
+    }
+
+    return Transform(
+      transform: _current,
+      alignment: Alignment.center,
+      child: Image.network(
+        widget.element['imageUrl'] as String? ?? '',
+        width: displayW,
+        height: displayH,
+        fit: BoxFit.contain,
       ),
     );
   }
