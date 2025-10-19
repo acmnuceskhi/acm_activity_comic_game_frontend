@@ -9,8 +9,8 @@ class FunctionsApi {
 
   FunctionsApi({String? getNextUrl, String? submitUrl})
     : getNextUrl = getNextUrl ?? Config.getNextFramesUrl,
-  submitUrl = submitUrl ?? Config.submitAnswerUrl,
-  getMusicLibraryUrl = Config.getMusicLibraryUrl;
+      submitUrl = submitUrl ?? Config.submitAnswerUrl,
+      getMusicLibraryUrl = Config.getMusicLibraryUrl;
 
   Future<Map<String, dynamic>> getNextFrames(String code) async {
     final uri = Uri.parse(getNextUrl).replace(queryParameters: {'code': code});

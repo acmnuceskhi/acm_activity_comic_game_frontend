@@ -98,14 +98,22 @@ class _CodeEntryPageState extends State<CodeEntryPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Enter Registration Code')),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+      body: Center(
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            TextField(
-              controller: _ctrl,
-              decoration: InputDecoration(labelText: 'Code', errorText: _error),
-              onSubmitted: (_) => _submit(),
+            SizedBox(
+              width: MediaQuery.of(context).size.width * 0.3 < 500
+                  ? 500
+                  : MediaQuery.of(context).size.width * 0.3,
+              child: TextField(
+                controller: _ctrl,
+                decoration: InputDecoration(
+                  labelText: 'Code',
+                  errorText: _error,
+                ),
+                onSubmitted: (_) => _submit(),
+              ),
             ),
             const SizedBox(height: 12),
             ElevatedButton(

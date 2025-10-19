@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+// import 'dart:math' as math; // not needed
 import '../services/functions_api.dart';
 import '../services/music_player.dart';
 
@@ -19,7 +20,8 @@ class ComicViewerPage extends StatefulWidget {
   State<ComicViewerPage> createState() => _ComicViewerPageState();
 }
 
-class _ComicViewerPageState extends State<ComicViewerPage> {
+class _ComicViewerPageState extends State<ComicViewerPage>
+    with SingleTickerProviderStateMixin {
   final FunctionsApi _api = FunctionsApi();
   late List<dynamic> frames;
   late List<dynamic> questions;
@@ -27,12 +29,31 @@ class _ComicViewerPageState extends State<ComicViewerPage> {
   bool _showingQuestion = false;
   bool _loading = false;
   final FocusNode _focusNode = FocusNode();
+  // Animation fields for "page throw" effect
+  late final AnimationController _animController;
+  late final Animation<double> _anim;
+  bool _isAnimating = false;
+  // int _animFromIdx = 0; // unused
+  int _animTargetIdx = 0;
+  int _animDirection = 1; // 1 = next (from right), -1 = prev (from left)
 
   @override
   void initState() {
     super.initState();
     frames = List.from(widget.initialFrames);
     questions = List.from(widget.initialQuestions);
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 520),
+    );
+    _anim = CurvedAnimation(
+      parent: _animController,
+      curve: Curves.easeOutCubic,
+    );
+    _animController.addListener(() {
+      // rebuild during animation
+      if (mounted) setState(() {});
+    });
     // play music for initial frame if available
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (frames.isNotEmpty) {
@@ -44,16 +65,18 @@ class _ComicViewerPageState extends State<ComicViewerPage> {
 
   @override
   void dispose() {
-    // stop any playing music when leaving the viewer
+    // stop any playing music and dispose animation controller
     try {
-      globalMusicPlayer.stop();
+      _animController.dispose();
     } catch (_) {}
+    globalMusicPlayer.stop();
     _focusNode.dispose();
     super.dispose();
   }
 
   void _onKey(RawKeyEvent ev) {
-    if (_showingQuestion || _loading) return; // disable keyboard navigation while answering
+    if (_showingQuestion || _loading)
+      return; // disable keyboard navigation while answering
     if (ev is RawKeyDownEvent) {
       if (ev.logicalKey == LogicalKeyboardKey.arrowRight) {
         _handleNext();
@@ -64,15 +87,11 @@ class _ComicViewerPageState extends State<ComicViewerPage> {
   }
 
   void _handlePrev() {
-    if (_showingQuestion || _loading) return; // prevent navigation while question dialog is open
-    if (idx > 0) setState(() => idx--);
-    // play music for the new frame
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (idx >= 0 && idx < frames.length) {
-        final mid = frames[idx]['musicId'] as String?;
-        globalMusicPlayer.play(mid);
-      }
-    });
+    if (_showingQuestion || _loading)
+      return; // prevent navigation while question dialog is open
+    if (idx > 0) {
+      _animateTo(idx - 1, -1);
+    }
   }
 
   Future<void> _handleNext() async {
@@ -86,12 +105,34 @@ class _ComicViewerPageState extends State<ComicViewerPage> {
       return; // after overlay, do not auto-advance automatically; refetch will update frames
     }
     if (idx < frames.length - 1) {
-      setState(() => idx++);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final mid = frames[idx]['musicId'] as String?;
-        globalMusicPlayer.play(mid);
-      });
+      _animateTo(idx + 1, 1);
     }
+  }
+
+  void _animateTo(int toIdx, int direction) {
+    if (_isAnimating) return;
+    if (toIdx < 0 || toIdx >= frames.length) return;
+    _isAnimating = true;
+    _animTargetIdx = toIdx;
+    _animDirection = direction;
+    // start playing target music so it overlaps with the animation
+    try {
+      final mid = frames[toIdx]['musicId'] as String?;
+      globalMusicPlayer.play(mid);
+    } catch (_) {}
+    _animController
+        .forward(from: 0)
+        .then((_) {
+          // commit the new index after animation
+          if (mounted) {
+            setState(() {
+              idx = toIdx;
+            });
+          }
+        })
+        .whenComplete(() {
+          _isAnimating = false;
+        });
   }
 
   Future<void> _showQuestionOverlayForFrame(dynamic frame) async {
@@ -118,7 +159,16 @@ class _ComicViewerPageState extends State<ComicViewerPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (question != null && question['imageUrl'] != null)
-                Image.network(question['imageUrl']),
+                Image.network(
+                  question['imageUrl'],
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return const SizedBox(
+                      height: 120,
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  },
+                ),
               const SizedBox(height: 8),
               Text(
                 question != null ? (question['text']?.toString() ?? '') : '',
@@ -158,7 +208,7 @@ class _ComicViewerPageState extends State<ComicViewerPage> {
         // detailed logging for debugging
         print('submitAnswer response: $res');
 
-        if (res != null && res['success'] == true && res['correct'] == true) {
+        if (res['success'] == true && res['correct'] == true) {
           // refetch frames
           await _refetchFrames();
         } else {
@@ -191,7 +241,7 @@ class _ComicViewerPageState extends State<ComicViewerPage> {
   Future<void> _refetchFrames() async {
     final res = await _api.getNextFrames(widget.code);
     print('getNextFrames response: $res');
-    if (res != null && res['success'] == true) {
+    if (res['success'] == true) {
       setState(() {
         frames = List.from(res['frames'] ?? []);
         questions = List.from(res['questions'] ?? []);
@@ -219,7 +269,31 @@ class _ComicViewerPageState extends State<ComicViewerPage> {
               fit: BoxFit.contain,
               width: double.infinity,
               height: double.infinity,
+              loadingBuilder: (context, child, loadingProgress) {
+                if (loadingProgress == null) return child;
+                return const Center(child: CircularProgressIndicator());
+              },
             ),
+    );
+  }
+
+  // Builds the animated overlay for the incoming page during the "throw" animation.
+  Widget _buildAnimatedOverlay(dynamic f) {
+    // animation value from 0.0 -> 1.0
+    final t = _anim.value;
+    // rotation: slight rotation depending on direction
+    final rot = (_animDirection * (1 - t) * 0.12); // radians
+    // translation: move from offscreen to center
+    final width = MediaQuery.of(context).size.width;
+    final dxStart = _animDirection * width;
+    final dx = dxStart * (1 - t);
+
+    return Transform.translate(
+      offset: Offset(dx, 0),
+      child: Transform.rotate(
+        angle: rot,
+        child: Opacity(opacity: t.clamp(0.0, 1.0), child: _buildFrame(f)),
+      ),
     );
   }
 
@@ -232,11 +306,17 @@ class _ComicViewerPageState extends State<ComicViewerPage> {
         appBar: AppBar(title: Text('Comic Viewer - ${widget.code}')),
         body: Stack(
           children: [
+            // base frame (current)
             Positioned.fill(
               child: frames.isEmpty
                   ? const Center(child: Text('No frames'))
                   : _buildFrame(frames[idx]),
             ),
+            // animated incoming page overlay
+            if (_isAnimating && frames.length > _animTargetIdx)
+              Positioned.fill(
+                child: _buildAnimatedOverlay(frames[_animTargetIdx]),
+              ),
             // left/right buttons for small screens
             Positioned(
               left: 8,
