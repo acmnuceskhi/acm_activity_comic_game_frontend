@@ -109,7 +109,7 @@ class _CodeEntryPageState extends State<CodeEntryPage> {
               child: TextField(
                 controller: _ctrl,
                 decoration: InputDecoration(
-                  labelText: 'Code RAAHIM',
+                  labelText: 'Code RAAHIMMM',
                   errorText: _error,
                 ),
                 onSubmitted: (_) => _submit(),
