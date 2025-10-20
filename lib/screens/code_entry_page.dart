@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/functions_api.dart';
 import '../services/app_state.dart';
 import '../services/music_player.dart';
@@ -116,6 +117,17 @@ class _CodeEntryPageState extends State<CodeEntryPage> {
               ),
             ),
             const SizedBox(height: 12),
+            TextButton(
+              child: const Text(
+                'Click here to register a new code',
+                style: TextStyle(decoration: TextDecoration.underline),
+              ),
+              onPressed: () async {
+                // open registration URL
+                Uri url = Uri.parse('https://www.activities.acmnuceskhi.com/');
+                await launchUrl(url);
+              },
+            ),
             ElevatedButton(
               onPressed: _loading ? null : _submit,
               child: _loading
