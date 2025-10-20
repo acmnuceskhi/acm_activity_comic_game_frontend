@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:ui' as ui;
 import '../services/functions_api.dart';
 import '../services/app_state.dart';
 import '../services/music_player.dart';
@@ -98,43 +99,140 @@ class _CodeEntryPageState extends State<CodeEntryPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Enter Registration Code')),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SizedBox(
-              width: MediaQuery.of(context).size.width * 0.3 < 500
-                  ? 500
-                  : MediaQuery.of(context).size.width * 0.3,
-              child: TextField(
-                controller: _ctrl,
-                decoration: InputDecoration(
-                  labelText: 'Code',
-                  errorText: _error,
+      extendBodyBehindAppBar: true,
+      body: Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFFD4C649), // Dirty yellow background
+        ),
+        child: Center(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 6.0, sigmaY: 6.0),
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.85 < 600
+                    ? MediaQuery.of(context).size.width * 0.85
+                    : 600,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: const Color(
+                    0xFF2C2A1F,
+                  ).withValues(alpha: 0.85), // Dark complementary color
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.14),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      blurRadius: 12,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
                 ),
-                onSubmitted: (_) => _submit(),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Enter Registration Code',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFD4C649), // Match background
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    TextField(
+                      controller: _ctrl,
+                      decoration: InputDecoration(
+                        labelText: 'Code',
+                        labelStyle: TextStyle(
+                          color: const Color(0xFFD4C649).withValues(alpha: 0.7),
+                        ),
+                        errorText: _error,
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.06),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide.none,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(
+                            color: const Color(
+                              0xFFD4C649,
+                            ).withValues(alpha: 0.3),
+                          ),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(
+                            color: Color(0xFFD4C649),
+                          ),
+                        ),
+                      ),
+                      style: const TextStyle(color: Colors.white),
+                      onSubmitted: (_) => _submit(),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        TextButton(
+                          onPressed: () async {
+                            Uri url = Uri.parse(
+                              'https://www.activities.acmnuceskhi.com/',
+                            );
+                            await launchUrl(url);
+                          },
+                          child: Text(
+                            'Register new code',
+                            style: TextStyle(
+                              decoration: TextDecoration.underline,
+                              color: const Color(
+                                0xFFD4C649,
+                              ).withValues(alpha: 0.8),
+                            ),
+                          ),
+                        ),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFD4C649),
+                            foregroundColor: const Color(0xFF2C2A1F),
+                            elevation: 4,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 12,
+                            ),
+                          ),
+                          onPressed: _loading ? null : _submit,
+                          child: _loading
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Color(0xFF2C2A1F),
+                                    ),
+                                  ),
+                                )
+                              : const Text(
+                                  'Continue',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                        ),
+                      ],
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(_error!, style: const TextStyle(color: Colors.red)),
+                    ],
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 12),
-            TextButton(
-              child: const Text(
-                'Click here to register a new code',
-                style: TextStyle(decoration: TextDecoration.underline),
-              ),
-              onPressed: () async {
-                // open registration URL
-                Uri url = Uri.parse('https://www.activities.acmnuceskhi.com/');
-                await launchUrl(url);
-              },
-            ),
-            ElevatedButton(
-              onPressed: _loading ? null : _submit,
-              child: _loading
-                  ? const CircularProgressIndicator()
-                  : const Text('Continue'),
-            ),
-          ],
+          ),
         ),
       ),
     );
