@@ -7,6 +7,7 @@ import '../services/app_state.dart';
 import '../services/music_player.dart';
 import 'package:video_player/video_player.dart';
 import 'comic_viewer_page.dart';
+import '../route_observer.dart';
 
 class CodeEntryPage extends StatefulWidget {
   const CodeEntryPage({super.key});
@@ -16,7 +17,7 @@ class CodeEntryPage extends StatefulWidget {
 }
 
 class _CodeEntryPageState extends State<CodeEntryPage>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, RouteAware {
   final _ctrl = TextEditingController();
   String? _error;
   bool _loading = false;
@@ -40,6 +41,9 @@ class _CodeEntryPageState extends State<CodeEntryPage>
     // start fetching config and initializing background video immediately
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initBackgroundFromConfig();
+      // subscribe to route changes so we can resume video when returning
+      final modal = ModalRoute.of(context);
+      if (modal != null) routeObserver.subscribe(this, modal);
     });
   }
 
@@ -47,21 +51,29 @@ class _CodeEntryPageState extends State<CodeEntryPage>
     try {
       print('DEBUG: initBackgroundFromConfig - start');
       final cfgRes = await _api.fetchConfig();
-      print('DEBUG: initBackgroundFromConfig - response: ${cfgRes.runtimeType}');
+      print(
+        'DEBUG: initBackgroundFromConfig - response: ${cfgRes.runtimeType}',
+      );
       if (cfgRes['success'] == true) {
         final bg = cfgRes['backgroundImageUrl'] as String?;
         final bv = cfgRes['backgroundVideoUrl'] as String?;
-        print('DEBUG: initBackgroundFromConfig - image present=${bg != null && bg.isNotEmpty} video present=${bv != null && bv.isNotEmpty}');
+        print(
+          'DEBUG: initBackgroundFromConfig - image present=${bg != null && bg.isNotEmpty} video present=${bv != null && bv.isNotEmpty}',
+        );
         if (bg != null && bg.isNotEmpty) {
           final as = Provider.of<AppState>(context, listen: false);
           await as.setBackgroundImageUrl(bg);
           print('DEBUG: initBackgroundFromConfig set backgroundImageUrl: $bg');
         }
         if (bv != null && bv.isNotEmpty) {
-          print('DEBUG: initBackgroundFromConfig - backgroundVideoUrl found: $bv');
+          print(
+            'DEBUG: initBackgroundFromConfig - backgroundVideoUrl found: $bv',
+          );
           if (_bgVideoController != null) {
             try {
-              print('DEBUG: disposing previous bg controller before init in initBackgroundFromConfig');
+              print(
+                'DEBUG: disposing previous bg controller before init in initBackgroundFromConfig',
+              );
               await _bgVideoController!.dispose();
             } catch (e) {
               print('DEBUG: error disposing previous controller: $e');
@@ -70,25 +82,40 @@ class _CodeEntryPageState extends State<CodeEntryPage>
           try {
             _bgVideoReady = false;
             _bgVideoController = VideoPlayerController.network(bv);
-            print('DEBUG: initializing bgVideoController (initBackgroundFromConfig)');
-            await _bgVideoController!.initialize().timeout(const Duration(seconds: 12), onTimeout: () {
-              throw Exception('Video initialization timed out');
-            });
-            print('DEBUG: bgVideoController initialized successfully in initBackgroundFromConfig');
+            print(
+              'DEBUG: initializing bgVideoController (initBackgroundFromConfig)',
+            );
+            await _bgVideoController!.initialize().timeout(
+              const Duration(seconds: 12),
+              onTimeout: () {
+                throw Exception('Video initialization timed out');
+              },
+            );
+            print(
+              'DEBUG: bgVideoController initialized successfully in initBackgroundFromConfig',
+            );
             _bgVideoController!.setLooping(true);
             _bgVideoController!.setVolume(0.0);
             await _bgVideoController!.play();
             _bgVideoReady = true;
-            print('DEBUG: Background video is now playing (initBackgroundFromConfig)');
+            print(
+              'DEBUG: Background video is now playing (initBackgroundFromConfig)',
+            );
           } catch (e, st) {
-            print('DEBUG: Failed to init/play background video in initBackgroundFromConfig: $e\n$st');
-            try { await _bgVideoController?.dispose(); } catch (_) {}
+            print(
+              'DEBUG: Failed to init/play background video in initBackgroundFromConfig: $e\n$st',
+            );
+            try {
+              await _bgVideoController?.dispose();
+            } catch (_) {}
             _bgVideoController = null;
             _bgVideoReady = false;
           }
         }
       } else {
-        print('DEBUG: initBackgroundFromConfig returned success!=true: $cfgRes');
+        print(
+          'DEBUG: initBackgroundFromConfig returned success!=true: $cfgRes',
+        );
       }
       print('DEBUG: initBackgroundFromConfig - end');
     } catch (e, st) {
@@ -109,6 +136,32 @@ class _CodeEntryPageState extends State<CodeEntryPage>
       }
     }
     super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    // Called when the top route has been popped and this route shows up again.
+    // Re-init the background video so it resumes playing on the entry page.
+    print('DEBUG: CodeEntryPage.didPopNext - reinitializing background video');
+    // Fire off re-init but don't await here.
+    _initBackgroundFromConfig();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Ensure we're subscribed if dependencies change and route is available
+    final modal = ModalRoute.of(context);
+    if (modal != null) routeObserver.subscribe(this, modal);
+  }
+
+  @override
+  void deactivate() {
+    // unsubscribe to avoid leaks
+    try {
+      routeObserver.unsubscribe(this);
+    } catch (_) {}
+    super.deactivate();
   }
 
   Future<void> _submit() async {
@@ -164,7 +217,7 @@ class _CodeEntryPageState extends State<CodeEntryPage>
       print(
         'DEBUG: getNextFrames fetched ${frames.length} frames, finished=$finished at ${DateTime.now().toIso8601String()}',
       );
-  // config is fetched on page load; no need to refetch here
+      // config is fetched on page load; no need to refetch here
       if (!mounted) return;
       // Ensure background video does not continue playing under the viewer.
       if (_bgVideoController != null) {
@@ -233,15 +286,17 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
-                      const Color(0xFFFFF7CC), // light yellow
-                      const Color(0xFFD4C649), // dirty yellow
+                      const Color.fromARGB(255, 225, 49, 0), // light yellow
+                      const Color.fromARGB(255, 255, 208, 0), // dirty yellow
                     ],
                     begin: begin,
                     end: end,
                   ),
                 ),
               ),
-              if (_bgVideoReady && _bgVideoController != null && _bgVideoController!.value.isInitialized)
+              if (_bgVideoReady &&
+                  _bgVideoController != null &&
+                  _bgVideoController!.value.isInitialized)
                 Positioned.fill(
                   child: FittedBox(
                     fit: BoxFit.cover,
@@ -285,12 +340,14 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
+                    Text(
                       'Enter Registration Code',
                       style: TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFFD4C649), // Match background
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.primary, // Match background
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -299,7 +356,9 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                       decoration: InputDecoration(
                         labelText: 'Code',
                         labelStyle: TextStyle(
-                          color: const Color(0xFFD4C649).withValues(alpha: 0.7),
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.primary.withValues(alpha: 0.7),
                         ),
                         errorText: _error,
                         filled: true,
@@ -311,15 +370,15 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(8),
                           borderSide: BorderSide(
-                            color: const Color(
-                              0xFFD4C649,
-                            ).withValues(alpha: 0.3),
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.primary.withValues(alpha: 0.3),
                           ),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(8),
-                          borderSide: const BorderSide(
-                            color: Color(0xFFD4C649),
+                          borderSide: BorderSide(
+                            color: Theme.of(context).colorScheme.primary,
                           ),
                         ),
                       ),
@@ -341,15 +400,17 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                             'Register new code',
                             style: TextStyle(
                               decoration: TextDecoration.underline,
-                              color: const Color(
-                                0xFFD4C649,
-                              ).withValues(alpha: 0.8),
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.primary.withValues(alpha: 0.8),
                             ),
                           ),
                         ),
                         ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFD4C649),
+                            backgroundColor: Theme.of(
+                              context,
+                            ).colorScheme.primary,
                             foregroundColor: const Color(0xFF2C2A1F),
                             elevation: 4,
                             padding: const EdgeInsets.symmetric(

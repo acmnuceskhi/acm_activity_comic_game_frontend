@@ -6,5 +6,6 @@ class Config {
   static const getMusicLibraryUrl =
       'https://getmusiclibrary-3aggrzznma-uc.a.run.app';
   static const fetchConfigUrl = 'https://fetchconfig-3aggrzznma-uc.a.run.app';
-  static const resetProgressUrl = 'https://resetprogress-3aggrzznma-uc.a.run.app';
+  static const resetProgressUrl =
+      'https://resetprogress-3aggrzznma-uc.a.run.app';
 }

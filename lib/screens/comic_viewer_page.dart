@@ -113,6 +113,66 @@ class _ComicViewerPageState extends State<ComicViewerPage>
     }
   }
 
+  Future<bool> _confirmBack() async {
+    // first check
+    final first = await showDialog<bool?>(
+      context: context,
+      barrierDismissible: true,
+      builder: (c) => AlertDialog(
+        title: const Text('Go back?'),
+        content: const Text(
+          'Do you want to go back? Your progress will be saved.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(c).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(c).pop(true),
+            child: const Text('Yes'),
+          ),
+        ],
+      ),
+    );
+    if (first != true) return false;
+
+    // second, stronger confirmation
+    final second = await showDialog<bool?>(
+      context: context,
+      barrierDismissible: true,
+      builder: (c) => AlertDialog(
+        title: const Text('Confirm go back'),
+        content: const Text(
+          'Returning will discard any unsaved progress. Continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(c).pop(false),
+            child: const Text('No'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(c).pop(true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    return second == true;
+  }
+
+  Future<void> _handleBack() async {
+    if (_loading) return; // avoid interfering while loading
+    final ok = await _confirmBack();
+    if (ok) {
+      // stop music and dispose any animations if needed
+      try {
+        globalMusicPlayer.stop();
+      } catch (_) {}
+      if (mounted) Navigator.of(context).pop();
+    }
+  }
+
   Future<void> _handleNext() async {
     if (_showingQuestion || _loading) return;
     if (frames.isEmpty) return;
@@ -498,7 +558,7 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                         child: Center(
                           child: Text(
                             (f['index'] != null)
-                                ? 'Page ${f['index'].toString()}'
+                                ? 'Page ${(int.tryParse(f['index'].toString()) ?? 0) + 1}'
                                 : '',
                             style: GoogleFonts.comicNeue(
                               textStyle: const TextStyle(
@@ -630,7 +690,6 @@ class _ComicViewerPageState extends State<ComicViewerPage>
       focusNode: _focusNode..requestFocus(),
       onKey: _onKey,
       child: Scaffold(
-        appBar: AppBar(title: Text('Comic Viewer - ${widget.code}')),
         body: LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
@@ -644,7 +703,7 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Text(
-                        'You have finished the comic!',
+                        'The End!',
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -654,11 +713,15 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                       ElevatedButton(
                         onPressed: () async {
                           try {
-                            setState(() { _loading = true; });
+                            setState(() {
+                              _loading = true;
+                            });
                             final r = await _api.resetProgress(widget.code);
                             print('resetProgress response: $r');
                             if (r['success'] == true) {
-                              setState(() { _showFinishedScreen = false; });
+                              setState(() {
+                                _showFinishedScreen = false;
+                              });
                               await _refetchFrames();
                             } else {
                               if (mounted) {
@@ -666,9 +729,15 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                                   context: context,
                                   builder: (c) => AlertDialog(
                                     title: const Text('Error'),
-                                    content: Text(r['message']?.toString() ?? 'Failed to reset'),
+                                    content: Text(
+                                      r['message']?.toString() ??
+                                          'Failed to reset',
+                                    ),
                                     actions: [
-                                      TextButton(onPressed: () => Navigator.of(c).pop(), child: const Text('OK')),
+                                      TextButton(
+                                        onPressed: () => Navigator.of(c).pop(),
+                                        child: const Text('OK'),
+                                      ),
                                     ],
                                   ),
                                 );
@@ -683,13 +752,19 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                                   title: const Text('Error'),
                                   content: Text('Failed to reset progress: $e'),
                                   actions: [
-                                    TextButton(onPressed: () => Navigator.of(c).pop(), child: const Text('OK')),
+                                    TextButton(
+                                      onPressed: () => Navigator.of(c).pop(),
+                                      child: const Text('OK'),
+                                    ),
                                   ],
                                 ),
                               );
                             }
                           } finally {
-                            if (mounted) setState(() { _loading = false; });
+                            if (mounted)
+                              setState(() {
+                                _loading = false;
+                              });
                           }
                         },
                         child: const Text('Play Again'),
@@ -796,6 +871,25 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                   ),
 
                 // small bottom-corner buttons for mobile (thumb-reachable)
+                // translucent top-left back button
+                Positioned(
+                  left: 12,
+                  top: 12,
+                  child: Material(
+                    color: Colors.black45,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: InkWell(
+                      onTap: _handleBack,
+                      borderRadius: BorderRadius.circular(8),
+                      child: const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Icon(Icons.arrow_back, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
                 Positioned(
                   left: 12,
                   bottom: 12,

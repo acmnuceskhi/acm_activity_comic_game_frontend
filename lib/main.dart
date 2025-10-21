@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/app_state.dart';
 import 'screens/code_entry_page.dart';
+import 'route_observer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,9 +19,10 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Comic Game',
       theme: ThemeData(
-        colorScheme: ColorScheme.dark(primary: Colors.yellow[200]!),
+        colorScheme: ColorScheme.light(primary: Colors.yellow[800]!),
       ),
       home: const CodeEntryPage(),
+      navigatorObservers: [routeObserver],
     );
   }
 }

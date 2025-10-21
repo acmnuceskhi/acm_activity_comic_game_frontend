@@ -9,12 +9,16 @@ class FunctionsApi {
   final String fetchConfigUrl;
   final String resetProgressUrl;
 
-  FunctionsApi({String? getNextUrl, String? submitUrl, String? fetchConfigUrl, String? resetProgressUrl})
-    : getNextUrl = getNextUrl ?? Config.getNextFramesUrl,
-      submitUrl = submitUrl ?? Config.submitAnswerUrl,
-      getMusicLibraryUrl = Config.getMusicLibraryUrl,
-      fetchConfigUrl = fetchConfigUrl ?? Config.fetchConfigUrl,
-      resetProgressUrl = resetProgressUrl ?? Config.resetProgressUrl;
+  FunctionsApi({
+    String? getNextUrl,
+    String? submitUrl,
+    String? fetchConfigUrl,
+    String? resetProgressUrl,
+  }) : getNextUrl = getNextUrl ?? Config.getNextFramesUrl,
+       submitUrl = submitUrl ?? Config.submitAnswerUrl,
+       getMusicLibraryUrl = Config.getMusicLibraryUrl,
+       fetchConfigUrl = fetchConfigUrl ?? Config.fetchConfigUrl,
+       resetProgressUrl = resetProgressUrl ?? Config.resetProgressUrl;
 
   Future<Map<String, dynamic>> getNextFrames(String code) async {
     final uri = Uri.parse(getNextUrl).replace(queryParameters: {'code': code});
