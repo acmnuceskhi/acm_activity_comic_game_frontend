@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import '../services/functions_api.dart';
 import '../services/app_state.dart';
 import '../services/music_player.dart';
+import 'package:video_player/video_player.dart';
 import 'comic_viewer_page.dart';
 
 class CodeEntryPage extends StatefulWidget {
@@ -21,6 +22,8 @@ class _CodeEntryPageState extends State<CodeEntryPage>
   bool _loading = false;
   final _api = FunctionsApi();
   late final AnimationController _animController;
+  VideoPlayerController? _bgVideoController;
+  bool _bgVideoReady = false;
 
   @override
   void initState() {
@@ -34,12 +37,77 @@ class _CodeEntryPageState extends State<CodeEntryPage>
       final as = Provider.of<AppState>(context, listen: false);
       if (as.code.isNotEmpty) _ctrl.text = as.code;
     });
+    // start fetching config and initializing background video immediately
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initBackgroundFromConfig();
+    });
+  }
+
+  Future<void> _initBackgroundFromConfig() async {
+    try {
+      print('DEBUG: initBackgroundFromConfig - start');
+      final cfgRes = await _api.fetchConfig();
+      print('DEBUG: initBackgroundFromConfig - response: ${cfgRes.runtimeType}');
+      if (cfgRes['success'] == true) {
+        final bg = cfgRes['backgroundImageUrl'] as String?;
+        final bv = cfgRes['backgroundVideoUrl'] as String?;
+        print('DEBUG: initBackgroundFromConfig - image present=${bg != null && bg.isNotEmpty} video present=${bv != null && bv.isNotEmpty}');
+        if (bg != null && bg.isNotEmpty) {
+          final as = Provider.of<AppState>(context, listen: false);
+          await as.setBackgroundImageUrl(bg);
+          print('DEBUG: initBackgroundFromConfig set backgroundImageUrl: $bg');
+        }
+        if (bv != null && bv.isNotEmpty) {
+          print('DEBUG: initBackgroundFromConfig - backgroundVideoUrl found: $bv');
+          if (_bgVideoController != null) {
+            try {
+              print('DEBUG: disposing previous bg controller before init in initBackgroundFromConfig');
+              await _bgVideoController!.dispose();
+            } catch (e) {
+              print('DEBUG: error disposing previous controller: $e');
+            }
+          }
+          try {
+            _bgVideoReady = false;
+            _bgVideoController = VideoPlayerController.network(bv);
+            print('DEBUG: initializing bgVideoController (initBackgroundFromConfig)');
+            await _bgVideoController!.initialize().timeout(const Duration(seconds: 12), onTimeout: () {
+              throw Exception('Video initialization timed out');
+            });
+            print('DEBUG: bgVideoController initialized successfully in initBackgroundFromConfig');
+            _bgVideoController!.setLooping(true);
+            _bgVideoController!.setVolume(0.0);
+            await _bgVideoController!.play();
+            _bgVideoReady = true;
+            print('DEBUG: Background video is now playing (initBackgroundFromConfig)');
+          } catch (e, st) {
+            print('DEBUG: Failed to init/play background video in initBackgroundFromConfig: $e\n$st');
+            try { await _bgVideoController?.dispose(); } catch (_) {}
+            _bgVideoController = null;
+            _bgVideoReady = false;
+          }
+        }
+      } else {
+        print('DEBUG: initBackgroundFromConfig returned success!=true: $cfgRes');
+      }
+      print('DEBUG: initBackgroundFromConfig - end');
+    } catch (e, st) {
+      print('DEBUG: initBackgroundFromConfig failed: $e\n$st');
+    }
   }
 
   @override
   void dispose() {
     _ctrl.dispose();
     _animController.dispose();
+    if (_bgVideoController != null) {
+      try {
+        print('DEBUG: disposing background video controller');
+        _bgVideoController!.dispose();
+      } catch (e) {
+        print('DEBUG: error disposing bg video controller: $e');
+      }
+    }
     super.dispose();
   }
 
@@ -96,7 +164,25 @@ class _CodeEntryPageState extends State<CodeEntryPage>
       print(
         'DEBUG: getNextFrames fetched ${frames.length} frames, finished=$finished at ${DateTime.now().toIso8601String()}',
       );
+  // config is fetched on page load; no need to refetch here
       if (!mounted) return;
+      // Ensure background video does not continue playing under the viewer.
+      if (_bgVideoController != null) {
+        try {
+          print('DEBUG: stopping background video before navigation');
+          await _bgVideoController!.pause();
+        } catch (e) {
+          print('DEBUG: error pausing bg video: $e');
+        }
+        try {
+          await _bgVideoController!.dispose();
+        } catch (e) {
+          print('DEBUG: error disposing bg video before navigation: $e');
+        }
+        _bgVideoController = null;
+        _bgVideoReady = false;
+      }
+
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => ComicViewerPage(
@@ -141,18 +227,33 @@ class _CodeEntryPageState extends State<CodeEntryPage>
             Alignment.bottomLeft,
             v,
           )!;
-          return Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  const Color(0xFFFFF7CC), // light yellow
-                  const Color(0xFFD4C649), // dirty yellow
-                ],
-                begin: begin,
-                end: end,
+          return Stack(
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      const Color(0xFFFFF7CC), // light yellow
+                      const Color(0xFFD4C649), // dirty yellow
+                    ],
+                    begin: begin,
+                    end: end,
+                  ),
+                ),
               ),
-            ),
-            child: child,
+              if (_bgVideoReady && _bgVideoController != null && _bgVideoController!.value.isInitialized)
+                Positioned.fill(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: _bgVideoController!.value.size.width,
+                      height: _bgVideoController!.value.size.height,
+                      child: VideoPlayer(_bgVideoController!),
+                    ),
+                  ),
+                ),
+              Positioned.fill(child: child!),
+            ],
           );
         },
         child: Center(

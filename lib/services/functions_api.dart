@@ -6,11 +6,15 @@ class FunctionsApi {
   final String getNextUrl;
   final String submitUrl;
   final String getMusicLibraryUrl;
+  final String fetchConfigUrl;
+  final String resetProgressUrl;
 
-  FunctionsApi({String? getNextUrl, String? submitUrl})
+  FunctionsApi({String? getNextUrl, String? submitUrl, String? fetchConfigUrl, String? resetProgressUrl})
     : getNextUrl = getNextUrl ?? Config.getNextFramesUrl,
       submitUrl = submitUrl ?? Config.submitAnswerUrl,
-      getMusicLibraryUrl = Config.getMusicLibraryUrl;
+      getMusicLibraryUrl = Config.getMusicLibraryUrl,
+      fetchConfigUrl = fetchConfigUrl ?? Config.fetchConfigUrl,
+      resetProgressUrl = resetProgressUrl ?? Config.resetProgressUrl;
 
   Future<Map<String, dynamic>> getNextFrames(String code) async {
     final uri = Uri.parse(getNextUrl).replace(queryParameters: {'code': code});
@@ -78,6 +82,46 @@ class FunctionsApi {
       return jsonDecode(r.body) as Map<String, dynamic>;
     } catch (e, st) {
       print('FunctionsApi.submitAnswer exception: $e');
+      print(st);
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> fetchConfig() async {
+    final uri = Uri.parse(fetchConfigUrl);
+    try {
+      final r = await http.get(uri);
+      if (r.statusCode != 200) {
+        print('FunctionsApi.fetchConfig ERROR: HTTP ${r.statusCode}');
+        print('URL: $uri');
+        print('Response body: ${r.body}');
+        throw Exception('fetchConfig failed: HTTP ${r.statusCode}');
+      }
+      return jsonDecode(r.body) as Map<String, dynamic>;
+    } catch (e, st) {
+      print('FunctionsApi.fetchConfig exception: $e');
+      print(st);
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> resetProgress(String code) async {
+    final uri = Uri.parse(resetProgressUrl);
+    try {
+      final r = await http.post(
+        uri,
+        body: jsonEncode({'code': code}),
+        headers: {'Content-Type': 'application/json'},
+      );
+      if (r.statusCode != 200) {
+        print('FunctionsApi.resetProgress ERROR: HTTP ${r.statusCode}');
+        print('URL: $uri');
+        print('Response body: ${r.body}');
+        throw Exception('resetProgress failed: HTTP ${r.statusCode}');
+      }
+      return jsonDecode(r.body) as Map<String, dynamic>;
+    } catch (e, st) {
+      print('FunctionsApi.resetProgress exception: $e');
       print(st);
       rethrow;
     }

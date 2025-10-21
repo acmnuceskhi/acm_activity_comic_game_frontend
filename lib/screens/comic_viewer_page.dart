@@ -652,8 +652,45 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                       ),
                       const SizedBox(height: 12),
                       ElevatedButton(
-                        onPressed: () {
-                          // Try Again functionality to be implemented later
+                        onPressed: () async {
+                          try {
+                            setState(() { _loading = true; });
+                            final r = await _api.resetProgress(widget.code);
+                            print('resetProgress response: $r');
+                            if (r['success'] == true) {
+                              setState(() { _showFinishedScreen = false; });
+                              await _refetchFrames();
+                            } else {
+                              if (mounted) {
+                                showDialog<void>(
+                                  context: context,
+                                  builder: (c) => AlertDialog(
+                                    title: const Text('Error'),
+                                    content: Text(r['message']?.toString() ?? 'Failed to reset'),
+                                    actions: [
+                                      TextButton(onPressed: () => Navigator.of(c).pop(), child: const Text('OK')),
+                                    ],
+                                  ),
+                                );
+                              }
+                            }
+                          } catch (e) {
+                            print('resetProgress failed: $e');
+                            if (mounted) {
+                              showDialog<void>(
+                                context: context,
+                                builder: (c) => AlertDialog(
+                                  title: const Text('Error'),
+                                  content: Text('Failed to reset progress: $e'),
+                                  actions: [
+                                    TextButton(onPressed: () => Navigator.of(c).pop(), child: const Text('OK')),
+                                  ],
+                                ),
+                              );
+                            }
+                          } finally {
+                            if (mounted) setState(() { _loading = false; });
+                          }
                         },
                         child: const Text('Play Again'),
                       ),
@@ -673,6 +710,7 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                   child: Builder(
                     builder: (ctx) {
                       final bg = Provider.of<AppState>(ctx).backgroundImageUrl;
+                      print("HERERERER: ${bg}");
                       if (bg == null || bg.isEmpty)
                         return const SizedBox.shrink();
                       return Positioned.fill(
