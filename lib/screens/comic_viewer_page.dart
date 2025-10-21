@@ -4,17 +4,22 @@ import 'package:flutter/services.dart';
 import '../services/functions_api.dart';
 import '../services/music_player.dart';
 import 'package:vector_math/vector_math_64.dart' show Matrix4;
+import 'package:provider/provider.dart';
+import '../services/app_state.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class ComicViewerPage extends StatefulWidget {
   final String code;
   final List<dynamic> initialFrames;
   final List<dynamic> initialQuestions;
+  final bool finished;
 
   const ComicViewerPage({
     super.key,
     required this.code,
     required this.initialFrames,
     required this.initialQuestions,
+    required this.finished,
   });
 
   @override
@@ -29,6 +34,7 @@ class _ComicViewerPageState extends State<ComicViewerPage>
   int idx = 0;
   bool _showingQuestion = false;
   bool _loading = false;
+  bool _showFinishedScreen = false;
   final FocusNode _focusNode = FocusNode();
   // Animation fields for "page throw" effect
   late final AnimationController _animController;
@@ -95,6 +101,13 @@ class _ComicViewerPageState extends State<ComicViewerPage>
   void _handlePrev() {
     if (_showingQuestion || _loading)
       return; // prevent navigation while question dialog is open
+    if (_showFinishedScreen) {
+      // go back from the finished screen to the last page
+      setState(() {
+        _showFinishedScreen = false;
+      });
+      return;
+    }
     if (idx > 0) {
       _animateTo(idx - 1, -1);
     }
@@ -106,12 +119,23 @@ class _ComicViewerPageState extends State<ComicViewerPage>
     final cur = frames[idx];
     final qSetId = cur['questionSetId'] as String?;
     if (qSetId != null && qSetId.isNotEmpty) {
-      // show overlay to answer
+      // current frame has a question -> show overlay to answer
       await _showQuestionOverlayForFrame(cur);
-      return; // after overlay, do not auto-advance automatically; refetch will update frames
+      return; // after overlay, refetch will update frames
     }
+
+    // current frame has no question
     if (idx < frames.length - 1) {
+      // not the last frame: advance normally
       _animateTo(idx + 1, 1);
+      return;
+    }
+
+    // we're on the last frame and it has no question -> show finish screen
+    if (idx == frames.length - 1) {
+      setState(() {
+        _showFinishedScreen = true;
+      });
     }
   }
 
@@ -156,30 +180,45 @@ class _ComicViewerPageState extends State<ComicViewerPage>
       builder: (c) {
         return AlertDialog(
           title: const Text('Question'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (question != null && question['imageUrl'] != null)
-                Image.network(
-                  question['imageUrl'],
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return const SizedBox(
-                      height: 120,
-                      child: Center(child: CircularProgressIndicator()),
-                    );
-                  },
+          content: SizedBox(
+            // limit height so dialog becomes scrollable on small screens
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(c).size.height * 0.7,
+                maxWidth: 500,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (question != null && question['imageUrl'] != null)
+                      Image.network(
+                        question['imageUrl'],
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return const SizedBox(
+                            height: 120,
+                            child: Center(child: CircularProgressIndicator()),
+                          );
+                        },
+                      ),
+                    const SizedBox(height: 8),
+                    Text(
+                      question != null
+                          ? (question['text']?.toString() ?? '')
+                          : '',
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: answerCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Your answer',
+                      ),
+                    ),
+                  ],
                 ),
-              const SizedBox(height: 8),
-              Text(
-                question != null ? (question['text']?.toString() ?? '') : '',
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: answerCtrl,
-                decoration: const InputDecoration(labelText: 'Your answer'),
-              ),
-            ],
+            ),
           ),
           actions: [
             TextButton(
@@ -196,8 +235,19 @@ class _ComicViewerPageState extends State<ComicViewerPage>
     );
 
     if (result == true) {
-      // submit
-      setState(() => _loading = true);
+      // show non-dismissible checking dialog
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (c) => const AlertDialog(
+          title: Text('Checking your answer'),
+          content: SizedBox(
+            height: 60,
+            child: Center(child: CircularProgressIndicator()),
+          ),
+        ),
+      );
+
       try {
         final res = await _api.submitAnswer(
           code: widget.code,
@@ -206,22 +256,75 @@ class _ComicViewerPageState extends State<ComicViewerPage>
           answer: answerCtrl.text.trim(),
         );
 
+        // close checking dialog
+        try {
+          Navigator.of(context).pop();
+        } catch (_) {}
+
         // detailed logging for debugging
         print('submitAnswer response: $res');
 
         if (res['success'] == true && res['correct'] == true) {
-          // refetch frames
-          await _refetchFrames();
+          // show success dialog
+          await showDialog<void>(
+            context: context,
+            barrierDismissible: true,
+            builder: (c) => AlertDialog(
+              title: const Text('Correct!'),
+              content: const Text('Your answer is correct.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(c).pop(),
+                  child: const Text('Continue'),
+                ),
+              ],
+            ),
+          );
+          // show a non-dismissible loading dialog while fetching new frames
+          showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (c) => const AlertDialog(
+              title: Text('Loading new frames'),
+              content: SizedBox(
+                height: 60,
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            ),
+          );
+          try {
+            await _refetchFrames();
+          } finally {
+            // close the loading dialog
+            try {
+              Navigator.of(context).pop();
+            } catch (_) {}
+          }
         } else {
           // incorrect or failure
           print('submitAnswer returned not-correct or failed: $res');
           if (mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('Incorrect answer')));
+            await showDialog<void>(
+              context: context,
+              barrierDismissible: true,
+              builder: (c) => AlertDialog(
+                title: const Text('Incorrect'),
+                content: const Text('Your answer was incorrect.'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(c).pop(),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            );
           }
         }
       } catch (e, st) {
+        // close checking dialog
+        try {
+          Navigator.of(context).pop();
+        } catch (_) {}
         // log detailed error on console
         print('ComicViewerPage.submit exception: $e');
         print(st);
@@ -229,10 +332,6 @@ class _ComicViewerPageState extends State<ComicViewerPage>
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(SnackBar(content: Text('Error: $e')));
-      } finally {
-        setState(() {
-          _loading = false;
-        });
       }
     }
 
@@ -242,11 +341,31 @@ class _ComicViewerPageState extends State<ComicViewerPage>
   Future<void> _refetchFrames() async {
     final res = await _api.getNextFrames(widget.code);
     print('getNextFrames response: $res');
+    try {
+      final framesCount = (res['frames'] is List)
+          ? (res['frames'] as List).length
+          : 0;
+      final finished = res['finished'] == true;
+      print(
+        'DEBUG: _refetchFrames fetched $framesCount frames, finished=$finished at ${DateTime.now().toIso8601String()}',
+      );
+    } catch (e) {
+      print('DEBUG: _refetchFrames failed to parse response: $e');
+    }
     if (res['success'] == true) {
+      // prepare new frames/questions first
+      final newFrames = List.from(res['frames'] ?? []);
+      final newQuestions = List.from(res['questions'] ?? []);
       setState(() {
-        frames = List.from(res['frames'] ?? []);
-        questions = List.from(res['questions'] ?? []);
+        frames = newFrames;
+        questions = newQuestions;
         idx = 0;
+        // Show the finish screen only if server says finished and there are no new frames
+        if (res['finished'] == true && newFrames.isEmpty) {
+          _showFinishedScreen = true;
+        } else {
+          _showFinishedScreen = false;
+        }
       });
       // play music for the (new) current frame immediately after refetch
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -258,7 +377,14 @@ class _ComicViewerPageState extends State<ComicViewerPage>
     }
   }
 
-  Widget _buildFrame(dynamic f, {Key? imageKey, bool elementsPlay = true}) {
+  Widget _buildFrame(
+    dynamic f, {
+    Key? imageKey,
+    bool elementsPlay = true,
+    double? pageWidth,
+    double? pageHeight,
+    double? pagePadding,
+  }) {
     final imageUrl = f['imageUrl'] as String? ?? '';
     if (imageUrl.isEmpty) {
       return Container(
@@ -275,8 +401,13 @@ class _ComicViewerPageState extends State<ComicViewerPage>
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final w = constraints.maxWidth;
-        final h = constraints.maxHeight;
+        // pageWidth/pageHeight are preferred; fallback to available constraints
+        final pageW = pageWidth ?? constraints.maxWidth;
+        final pageH = pageHeight ?? constraints.maxHeight;
+        final padding = pagePadding ?? (pageH * 0.04);
+
+        final w = pageW - padding * 2;
+        final h = pageH - padding * 2;
         // measure displayed frame size (BoxFit.contain) after layout
         WidgetsBinding.instance.addPostFrameCallback((_) {
           final ctx = _frameImageKey.currentContext;
@@ -285,8 +416,9 @@ class _ComicViewerPageState extends State<ComicViewerPage>
             if (size != null) {
               final newW = size.width;
               final newH = size.height;
-              final newLeft = (w - newW) / 2.0;
-              final newTop = (h - newH) / 2.0;
+              // image is centered inside the inner area; compute left/top relative to the page
+              final newLeft = (pageW - newW) / 2.0;
+              final newTop = (pageH - newH) / 2.0;
               if (newW != _frameW ||
                   newH != _frameH ||
                   newLeft != _frameLeft ||
@@ -315,22 +447,70 @@ class _ComicViewerPageState extends State<ComicViewerPage>
         // otherwise approximate using base
         final imgW = (imageKey != null && _frameW > 0) ? _frameW : base;
         final imgH = (imageKey != null && _frameH > 0) ? _frameH : base;
-        final frameLeftLocal = (w - imgW) / 2.0;
-        final frameTopLocal = (h - imgH) / 2.0;
+        final frameLeftLocal = (pageW - imgW) / 2.0;
+        final frameTopLocal = (pageH - imgH) / 2.0;
 
         return Stack(
           clipBehavior: Clip.none,
           children: [
+            // Page container centered with padding
             Positioned.fill(
               child: Center(
-                child: Image.network(
-                  imageUrl,
-                  key: imageKey,
-                  fit: BoxFit.contain,
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return const Center(child: CircularProgressIndicator());
-                  },
+                child: Container(
+                  width: pageW,
+                  height: pageH,
+                  padding: EdgeInsets.all(padding),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Stack(
+                    children: [
+                      Center(
+                        child: Image.network(
+                          imageUrl,
+                          key: imageKey,
+                          fit: BoxFit.contain,
+                          frameBuilder:
+                              (context, child, frame, wasSynchronouslyLoaded) {
+                                if (wasSynchronouslyLoaded) return child;
+                                if (frame == null) {
+                                  return Center(
+                                    child: Text(
+                                      'loading...',
+                                      style: GoogleFonts.comicNeue(
+                                        textStyle: const TextStyle(
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
+                                return child;
+                              },
+                        ),
+                      ),
+                      // integrate page number into the page container (looks like part of the page)
+                      Positioned(
+                        bottom: 8,
+                        left: pageW * 0.05,
+                        right: pageW * 0.05,
+                        child: Center(
+                          child: Text(
+                            (f['index'] != null)
+                                ? 'Page ${f['index'].toString()}'
+                                : '',
+                            style: GoogleFonts.comicNeue(
+                              textStyle: const TextStyle(
+                                color: Colors.black87,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -456,13 +636,62 @@ class _ComicViewerPageState extends State<ComicViewerPage>
             final width = constraints.maxWidth;
             final height = constraints.maxHeight;
 
-            if (frames.isEmpty) {
+            if (frames.isEmpty || _showFinishedScreen) {
+              // If the backend indicated finished or local flag is set, show finish UI
+              if (widget.finished || _showFinishedScreen) {
+                return Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'You have finished the comic!',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      ElevatedButton(
+                        onPressed: () {
+                          // Try Again functionality to be implemented later
+                        },
+                        child: const Text('Play Again'),
+                      ),
+                    ],
+                  ),
+                );
+              }
               return const Center(child: Text('No frames'));
             }
 
             return Stack(
+              alignment: Alignment.center,
               clipBehavior: Clip.none,
               children: [
+                // background image (from admin-configured URL) if present
+                SizedBox.expand(
+                  child: Builder(
+                    builder: (ctx) {
+                      final bg = Provider.of<AppState>(ctx).backgroundImageUrl;
+                      if (bg == null || bg.isEmpty)
+                        return const SizedBox.shrink();
+                      return Positioned.fill(
+                        child: Image.network(
+                          bg,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          height: double.infinity,
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            return const Center(
+                              child: CircularProgressIndicator(),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
                 for (var i = 0; i < frames.length; i++)
                   // each frame is a positioned full-size child translated horizontally
                   Positioned.fill(
@@ -492,6 +721,17 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                             }
                           }
 
+                          // compute page dimensions relative to screen height
+                          final pageHeight =
+                              height * 0.92; // 92% of screen height
+                          final pageWidth = (pageHeight * 0.66).clamp(
+                            0.0,
+                            width * 0.95,
+                          );
+                          final pagePadding =
+                              pageHeight *
+                              0.04; // moderate padding relative to height
+
                           return Transform.rotate(
                             angle: angle,
                             alignment: Alignment.center,
@@ -506,6 +746,9 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                                     : null,
                                 // only allow elements to play after translation finished and this is the active frame
                                 elementsPlay: (!_isAnimating && i == idx),
+                                pageWidth: pageWidth,
+                                pageHeight: pageHeight,
+                                pagePadding: pagePadding,
                               ),
                             ),
                           );
@@ -563,7 +806,6 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                     ),
                   ),
                 ),
-
                 if (_loading) const Center(child: CircularProgressIndicator()),
               ],
             );

@@ -14,20 +14,33 @@ class CodeEntryPage extends StatefulWidget {
   State<CodeEntryPage> createState() => _CodeEntryPageState();
 }
 
-class _CodeEntryPageState extends State<CodeEntryPage> {
+class _CodeEntryPageState extends State<CodeEntryPage>
+    with SingleTickerProviderStateMixin {
   final _ctrl = TextEditingController();
   String? _error;
   bool _loading = false;
   final _api = FunctionsApi();
+  late final AnimationController _animController;
 
   @override
   void initState() {
     super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 6),
+    )..repeat(reverse: true);
     // load initial code from provider (already loaded in main)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final as = Provider.of<AppState>(context, listen: false);
       if (as.code.isNotEmpty) _ctrl.text = as.code;
     });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _animController.dispose();
+    super.dispose();
   }
 
   Future<void> _submit() async {
@@ -38,6 +51,15 @@ class _CodeEntryPageState extends State<CodeEntryPage> {
     final code = _ctrl.text.trim();
     try {
       final res = await _api.getNextFrames(code);
+      // debug: log cached background URL and fetched frames info
+      try {
+        final appState = Provider.of<AppState>(context, listen: false);
+        print(
+          'DEBUG: AppState.backgroundImageUrl=${appState.backgroundImageUrl}',
+        );
+      } catch (e) {
+        print('DEBUG: failed to read AppState background url: $e');
+      }
       if (res['success'] != true) {
         // log response for debugging
         print('getNextFrames returned success!=true for code=$code: $res');
@@ -70,6 +92,10 @@ class _CodeEntryPageState extends State<CodeEntryPage> {
       // navigate to viewer with received frames
       final frames = res['frames'] as List<dynamic>? ?? [];
       final questions = res['questions'] as List<dynamic>? ?? [];
+      final finished = res['finished'] == true;
+      print(
+        'DEBUG: getNextFrames fetched ${frames.length} frames, finished=$finished at ${DateTime.now().toIso8601String()}',
+      );
       if (!mounted) return;
       Navigator.of(context).push(
         MaterialPageRoute(
@@ -77,6 +103,7 @@ class _CodeEntryPageState extends State<CodeEntryPage> {
             code: code,
             initialFrames: frames,
             initialQuestions: questions,
+            finished: finished,
           ),
         ),
       );
@@ -100,10 +127,34 @@ class _CodeEntryPageState extends State<CodeEntryPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       extendBodyBehindAppBar: true,
-      body: Container(
-        decoration: const BoxDecoration(
-          color: Color(0xFFD4C649), // Dirty yellow background
-        ),
+      body: AnimatedBuilder(
+        animation: _animController,
+        builder: (context, child) {
+          final v = _animController.value;
+          final begin = Alignment.lerp(
+            Alignment.topLeft,
+            Alignment.topRight,
+            v,
+          )!;
+          final end = Alignment.lerp(
+            Alignment.bottomRight,
+            Alignment.bottomLeft,
+            v,
+          )!;
+          return Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  const Color(0xFFFFF7CC), // light yellow
+                  const Color(0xFFD4C649), // dirty yellow
+                ],
+                begin: begin,
+                end: end,
+              ),
+            ),
+            child: child,
+          );
+        },
         child: Center(
           child: ClipRRect(
             borderRadius: BorderRadius.circular(16),
