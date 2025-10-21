@@ -165,13 +165,44 @@ class _CodeEntryPageState extends State<CodeEntryPage>
   }
 
   Future<void> _submit() async {
+    final code = _ctrl.text.trim();
+    // guard: don't submit empty code
+    if (code.isEmpty) {
+      setState(() {
+        _error = 'Please enter your registration code';
+      });
+      return;
+    }
+
     setState(() {
       _loading = true;
       _error = null;
     });
-    final code = _ctrl.text.trim();
     try {
-      final res = await _api.getNextFrames(code);
+      Map<String, dynamic> res;
+      try {
+        res = await _api.getNextFrames(code);
+      } catch (e) {
+        // Map common errors to friendly messages instead of raw exception
+        print('FunctionsApi.getNextFrames threw: $e');
+        String friendly;
+        final msg = e.toString().toLowerCase();
+        if (msg.contains('404') || msg.contains('not found')) {
+          friendly = 'Code not recognized. Please check and try again.';
+        } else if (msg.contains('400') || msg.contains('bad request')) {
+          friendly = 'Invalid code format. Please check and try again.';
+        } else if (msg.contains('timed out') || msg.contains('timeout')) {
+          friendly = 'Request timed out. Check your connection and try again.';
+        } else {
+          friendly = 'Failed to validate code. Please try again later.';
+        }
+        if (mounted)
+          setState(() {
+            _error = friendly;
+            _loading = false;
+          });
+        return;
+      }
       // debug: log cached background URL and fetched frames info
       try {
         final appState = Provider.of<AppState>(context, listen: false);
@@ -184,8 +215,25 @@ class _CodeEntryPageState extends State<CodeEntryPage>
       if (res['success'] != true) {
         // log response for debugging
         print('getNextFrames returned success!=true for code=$code: $res');
+        // map server response to a user-friendly message
+        final serverMsg = res['message']?.toString() ?? '';
+        String friendly;
+        if (serverMsg.isEmpty) {
+          friendly = 'Invalid or expired code. Please check and try again.';
+    } else if (serverMsg.toLowerCase().contains('not found') ||
+      serverMsg.toLowerCase().contains('no response') ||
+      serverMsg.toLowerCase().contains('invalid')) {
+          friendly = 'Code not recognized. Please check and try again.';
+        } else if (serverMsg.toLowerCase().contains('expired') ||
+            serverMsg.toLowerCase().contains('finished')) {
+          friendly = 'This code has already been used or has expired.';
+        } else {
+          // fallback short message
+          friendly = 'Could not validate code. Please try again later.';
+        }
+
         setState(() {
-          _error = res['message']?.toString() ?? 'Invalid code';
+          _error = friendly;
           _loading = false;
         });
         return;
@@ -246,17 +294,15 @@ class _CodeEntryPageState extends State<CodeEntryPage>
           ),
         ),
       );
-    } catch (e) {
-      // log for console
+    } catch (e, st) {
+      // log internal error for debugging, but show a friendly message to the user
       print('CodeEntryPage._submit exception: $e');
-      try {
-        throw e;
-      } catch (e, st) {
-        print(st);
+      print(st);
+      if (mounted) {
+        setState(() {
+          _error = 'Request failed. Please try again.';
+        });
       }
-      setState(() {
-        _error = 'Request failed: $e';
-      });
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -437,10 +483,6 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                         ),
                       ],
                     ),
-                    if (_error != null) ...[
-                      const SizedBox(height: 12),
-                      Text(_error!, style: const TextStyle(color: Colors.red)),
-                    ],
                   ],
                 ),
               ),
