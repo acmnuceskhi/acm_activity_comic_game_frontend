@@ -728,69 +728,50 @@ class _ComicViewerPageState extends State<ComicViewerPage>
     return RawKeyboardListener(
       focusNode: _focusNode,
       onKey: _onKey,
-      child: SingleChildScrollView(
-        child: Scaffold(
-          body: LayoutBuilder(
-            builder: (context, constraints) {
-              final width = constraints.maxWidth;
-              final height = constraints.maxHeight;
-        
-              if (frames.isEmpty || _showFinishedScreen) {
-                // If the backend indicated finished or local flag is set, show finish UI
-                if (widget.finished || _showFinishedScreen) {
-                  return Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text(
-                          'The End!',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
+      child: Scaffold(
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final height = constraints.maxHeight;
+
+            if (frames.isEmpty || _showFinishedScreen) {
+              // If the backend indicated finished or local flag is set, show finish UI
+              if (widget.finished || _showFinishedScreen) {
+                return Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'The End!',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
                         ),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                          onPressed: () async {
-                            try {
+                      ),
+                      const SizedBox(height: 12),
+                      ElevatedButton(
+                        onPressed: () async {
+                          try {
+                            setState(() {
+                              _loading = true;
+                            });
+                            final r = await _api.resetProgress(widget.code);
+                            print('resetProgress response: $r');
+                            if (r['success'] == true) {
                               setState(() {
-                                _loading = true;
+                                _showFinishedScreen = false;
                               });
-                              final r = await _api.resetProgress(widget.code);
-                              print('resetProgress response: $r');
-                              if (r['success'] == true) {
-                                setState(() {
-                                  _showFinishedScreen = false;
-                                });
-                                await _refetchFrames();
-                              } else {
-                                if (mounted) {
-                                  showDialog<void>(
-                                    context: context,
-                                    builder: (c) => AlertDialog(
-                                      title: const Text('Error'),
-                                      content: Text(
-                                        r['message']?.toString() ??
-                                            'Failed to reset',
-                                      ),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () => Navigator.of(c).pop(),
-                                          child: const Text('OK'),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                }
-                              }
-                            } catch (e) {
-                              print('resetProgress failed: $e');
+                              await _refetchFrames();
+                            } else {
                               if (mounted) {
                                 showDialog<void>(
                                   context: context,
                                   builder: (c) => AlertDialog(
                                     title: const Text('Error'),
-                                    content: Text('Failed to reset progress: $e'),
+                                    content: Text(
+                                      r['message']?.toString() ??
+                                          'Failed to reset',
+                                    ),
                                     actions: [
                                       TextButton(
                                         onPressed: () => Navigator.of(c).pop(),
@@ -800,218 +781,236 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                                   ),
                                 );
                               }
-                            } finally {
-                              if (mounted)
-                                setState(() {
-                                  _loading = false;
-                                });
                             }
-                          },
-                          child: const Text('Play Again'),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-                return const Center(child: Text('No frames'));
+                          } catch (e) {
+                            print('resetProgress failed: $e');
+                            if (mounted) {
+                              showDialog<void>(
+                                context: context,
+                                builder: (c) => AlertDialog(
+                                  title: const Text('Error'),
+                                  content: Text('Failed to reset progress: $e'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.of(c).pop(),
+                                      child: const Text('OK'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
+                          } finally {
+                            if (mounted)
+                              setState(() {
+                                _loading = false;
+                              });
+                          }
+                        },
+                        child: const Text('Play Again'),
+                      ),
+                    ],
+                  ),
+                );
               }
-        
-              return Stack(
-                alignment: Alignment.center,
-                clipBehavior: Clip.none,
-                children: [
-                  // background image (from admin-configured URL) if present
-                  SizedBox.expand(
-                    child: Builder(
-                      builder: (ctx) {
-                        final bg = Provider.of<AppState>(ctx).backgroundImageUrl;
-        
-                        if (bg == null || bg.isEmpty) {
-                          return const SizedBox.shrink();
-                        }
-        
-                        return Stack(
-                          children: [
-                            Positioned.fill(
-                              child: Image.network(
-                                bg,
-                                fit: BoxFit.cover,
-                                width: double.infinity,
-                                height: double.infinity,
-                                loadingBuilder: (context, child, loadingProgress) {
-                                  if (loadingProgress == null) {
-                                    return child;
-                                  }
-                                  return Container(
-                                    color: Colors.black87,
-                                    child: const Center(
-                                      child: CircularProgressIndicator(),
-                                    ),
-                                  );
-                                },
-                                errorBuilder: (context, error, stackTrace) {
-                                  return Container(
-                                    color: Colors.black87,
-                                    alignment: Alignment.center,
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          'Background Failed: ${error.toString()}',
-                                          style: const TextStyle(
-                                            color: Colors.red,
-                                          ),
-                                          textAlign: TextAlign.center,
+              return const Center(child: Text('No frames'));
+            }
+
+            return Stack(
+              alignment: Alignment.center,
+              clipBehavior: Clip.none,
+              children: [
+                // background image (from admin-configured URL) if present
+                SizedBox.expand(
+                  child: Builder(
+                    builder: (ctx) {
+                      final bg = Provider.of<AppState>(ctx).backgroundImageUrl;
+
+                      if (bg == null || bg.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+
+                      return Stack(
+                        children: [
+                          Positioned.fill(
+                            child: Image.network(
+                              bg,
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              height: double.infinity,
+                              loadingBuilder:
+                                  (context, child, loadingProgress) {
+                                    if (loadingProgress == null) {
+                                      return child;
+                                    }
+                                    return Container(
+                                      color: Colors.black87,
+                                      child: const Center(
+                                        child: CircularProgressIndicator(),
+                                      ),
+                                    );
+                                  },
+                              errorBuilder: (context, error, stackTrace) {
+                                return Container(
+                                  color: Colors.black87,
+                                  alignment: Alignment.center,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        'Background Failed: ${error.toString()}',
+                                        style: const TextStyle(
+                                          color: Colors.red,
                                         ),
-                                      ],
-                                    ),
-                                  );
-                                },
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+                for (var i = 0; i < frames.length; i++)
+                  // each frame is a positioned full-size child translated horizontally
+                  Positioned.fill(
+                    child: Transform.translate(
+                      offset: Offset(
+                        // compute offset multiplier: (i - idx) shifted by animation progress
+                        (((i - idx) -
+                                (_isAnimating
+                                    ? _anim.value * _animDirection
+                                    : 0.0)) *
+                            width),
+                        0,
+                      ),
+                      child: Builder(
+                        builder: (ctx) {
+                          // compute a small rotation for incoming/outgoing pages
+                          const maxAngle = 0.12; // radians (~6.9deg)
+                          double angle = 0.0;
+                          if (_isAnimating) {
+                            final p = _anim.value; // 0 -> 1
+                            if (i == idx) {
+                              // outgoing page: rotate outwards
+                              angle = -_animDirection * p * maxAngle;
+                            } else if (i == idx + _animDirection) {
+                              // incoming page: rotate from angle -> 0
+                              angle = _animDirection * (1.0 - p) * maxAngle;
+                            }
+                          }
+
+                          // compute page dimensions relative to screen height
+                          final pageHeight =
+                              height * 0.92; // 92% of screen height
+                          final pageWidth = (pageHeight * 0.66).clamp(
+                            0.0,
+                            width * 0.95,
+                          );
+                          final pagePadding =
+                              pageHeight *
+                              0.04; // moderate padding relative to height
+
+                          return Transform.rotate(
+                            angle: angle,
+                            alignment: Alignment.center,
+                            child: SizedBox(
+                              width: width,
+                              height: height,
+                              child: _buildFrame(
+                                frames[i],
+                                // only keep the measured key on the currently settled frame
+                                imageKey: (!_isAnimating && i == idx)
+                                    ? _frameImageKey
+                                    : null,
+                                // only allow elements to play after translation finished and this is the active frame
+                                elementsPlay: (!_isAnimating && i == idx),
+                                pageWidth: pageWidth,
+                                pageHeight: pageHeight,
+                                pagePadding: pagePadding,
                               ),
                             ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
-                  for (var i = 0; i < frames.length; i++)
-                    // each frame is a positioned full-size child translated horizontally
-                    Positioned.fill(
-                      child: Transform.translate(
-                        offset: Offset(
-                          // compute offset multiplier: (i - idx) shifted by animation progress
-                          (((i - idx) -
-                                  (_isAnimating
-                                      ? _anim.value * _animDirection
-                                      : 0.0)) *
-                              width),
-                          0,
-                        ),
-                        child: Builder(
-                          builder: (ctx) {
-                            // compute a small rotation for incoming/outgoing pages
-                            const maxAngle = 0.12; // radians (~6.9deg)
-                            double angle = 0.0;
-                            if (_isAnimating) {
-                              final p = _anim.value; // 0 -> 1
-                              if (i == idx) {
-                                // outgoing page: rotate outwards
-                                angle = -_animDirection * p * maxAngle;
-                              } else if (i == idx + _animDirection) {
-                                // incoming page: rotate from angle -> 0
-                                angle = _animDirection * (1.0 - p) * maxAngle;
-                              }
-                            }
-        
-                            // compute page dimensions relative to screen height
-                            final pageHeight =
-                                height * 0.92; // 92% of screen height
-                            final pageWidth = (pageHeight * 0.66).clamp(
-                              0.0,
-                              width * 0.95,
-                            );
-                            final pagePadding =
-                                pageHeight *
-                                0.04; // moderate padding relative to height
-        
-                            return Transform.rotate(
-                              angle: angle,
-                              alignment: Alignment.center,
-                              child: SizedBox(
-                                width: width,
-                                height: height,
-                                child: _buildFrame(
-                                  frames[i],
-                                  // only keep the measured key on the currently settled frame
-                                  imageKey: (!_isAnimating && i == idx)
-                                      ? _frameImageKey
-                                      : null,
-                                  // only allow elements to play after translation finished and this is the active frame
-                                  elementsPlay: (!_isAnimating && i == idx),
-                                  pageWidth: pageWidth,
-                                  pageHeight: pageHeight,
-                                  pagePadding: pagePadding,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
+                          );
+                        },
                       ),
                     ),
-        
-                  // small bottom-corner buttons for mobile (thumb-reachable)
-                  // translucent top-left back button
-                  Positioned(
-                    left: 12,
-                    top: 12,
+                  ),
+
+                // small bottom-corner buttons for mobile (thumb-reachable)
+                // translucent top-left back button
+                Positioned(
+                  left: 12,
+                  top: 12,
+                  child: Material(
+                    color: Colors.black45,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: InkWell(
+                      onTap: _handleBack,
+                      borderRadius: BorderRadius.circular(8),
+                      child: const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Icon(Icons.arrow_back, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 12,
+                  bottom: 12,
+                  child: Visibility(
+                    visible: MediaQuery.of(context).size.width < 600,
                     child: Material(
                       color: Colors.black45,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                      shape: const CircleBorder(),
                       child: InkWell(
-                        onTap: _handleBack,
-                        borderRadius: BorderRadius.circular(8),
-                        child: const Padding(
-                          padding: EdgeInsets.all(8.0),
-                          child: Icon(Icons.arrow_back, color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 12,
-                    bottom: 12,
-                    child: Visibility(
-                      visible: MediaQuery.of(context).size.width < 600,
-                      child: Material(
-                        color: Colors.black45,
-                        shape: const CircleBorder(),
-                        child: InkWell(
-                          customBorder: const CircleBorder(),
-                          onTap: _handlePrev,
-                          child: const SizedBox(
-                            width: 56,
-                            height: 56,
-                            child: Icon(
-                              Icons.arrow_left,
-                              color: Colors.white,
-                              size: 32,
-                            ),
+                        customBorder: const CircleBorder(),
+                        onTap: _handlePrev,
+                        child: const SizedBox(
+                          width: 56,
+                          height: 56,
+                          child: Icon(
+                            Icons.arrow_left,
+                            color: Colors.white,
+                            size: 32,
                           ),
                         ),
                       ),
                     ),
                   ),
-                  Positioned(
-                    right: 12,
-                    bottom: 12,
-                    child: Visibility(
-                      visible: MediaQuery.of(context).size.width < 600,
-                      child: Material(
-                        color: Colors.black45,
-                        shape: const CircleBorder(),
-                        child: InkWell(
-                          customBorder: const CircleBorder(),
-                          onTap: _handleNext,
-                          child: const SizedBox(
-                            width: 56,
-                            height: 56,
-                            child: Icon(
-                              Icons.arrow_right,
-                              color: Colors.white,
-                              size: 32,
-                            ),
+                ),
+                Positioned(
+                  right: 12,
+                  bottom: 12,
+                  child: Visibility(
+                    visible: MediaQuery.of(context).size.width < 600,
+                    child: Material(
+                      color: Colors.black45,
+                      shape: const CircleBorder(),
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: _handleNext,
+                        child: const SizedBox(
+                          width: 56,
+                          height: 56,
+                          child: Icon(
+                            Icons.arrow_right,
+                            color: Colors.white,
+                            size: 32,
                           ),
                         ),
                       ),
                     ),
                   ),
-                  if (_loading) const Center(child: CircularProgressIndicator()),
-                ],
-              );
-            },
-          ),
+                ),
+                if (_loading) const Center(child: CircularProgressIndicator()),
+              ],
+            );
+          },
         ),
       ),
     );
