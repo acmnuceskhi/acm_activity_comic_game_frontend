@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:html' as html;
 // import 'dart:math' as math; // not needed
 import '../services/functions_api.dart';
 import '../services/music_player.dart';
@@ -171,33 +170,6 @@ class _ComicViewerPageState extends State<ComicViewerPage>
         globalMusicPlayer.stop();
       } catch (_) {}
       if (mounted) Navigator.of(context).pop();
-    }
-  }
-
-  void _downloadCurrentFrame() {
-    if (frames.isEmpty || idx >= frames.length) return;
-    final imageUrl = frames[idx]['imageUrl'] as String? ?? '';
-    if (imageUrl.isEmpty) return;
-
-    // Create an anchor element with download attribute
-    final anchor = html.AnchorElement()
-      ..href = imageUrl
-      ..download = 'comic_page_${idx + 1}.jpg' // Default extension
-      ..style.display = 'none';
-
-    // Add to document body, click it, and remove it
-    html.document.body?.append(anchor);
-    anchor.click();
-    anchor.remove();
-
-    // Show a snackbar to confirm download started
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Download started...'),
-          duration: Duration(seconds: 2),
-        ),
-      );
     }
   }
 
@@ -714,8 +686,22 @@ class _ComicViewerPageState extends State<ComicViewerPage>
 
   @override
   Widget build(BuildContext context) {
+    // Manage focus so that on mobile the dialog's TextField can receive
+    // focus without the page-level RawKeyboardListener stealing it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_showingQuestion) {
+        // If a question dialog is open, remove focus from the page-level
+        // listener so the dialog's text field can open the keyboard.
+        if (_focusNode.hasFocus) _focusNode.unfocus();
+      } else {
+        // On non-dialog states acquire focus so keyboard events work on
+        // desktop/web. We only request focus when not already focused.
+        if (!_focusNode.hasFocus) _focusNode.requestFocus();
+      }
+    });
+
     return RawKeyboardListener(
-      focusNode: _focusNode..requestFocus(),
+      focusNode: _focusNode,
       onKey: _onKey,
       child: Scaffold(
         body: LayoutBuilder(
@@ -828,6 +814,22 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                               child: CircularProgressIndicator(),
                             );
                           },
+                          errorBuilder: (context, error, stackTrace) {
+                            // Log the error so we can inspect it in release logs if needed
+                            debugPrint(
+                              'Background image failed to load: $error',
+                            );
+                            String err = error.toString();
+                            // Visible fallback so the missing background is obvious in release builds
+                            return Container(
+                              color: Colors.black87,
+                              alignment: Alignment.center,
+                              child: Text(
+                                'Background unavailable, $err',
+                                style: TextStyle(color: Colors.white70),
+                              ),
+                            );
+                          },
                         ),
                       );
                     },
@@ -899,42 +901,23 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                   ),
 
                 // small bottom-corner buttons for mobile (thumb-reachable)
-                // translucent top-left buttons
+                // translucent top-left back button
                 Positioned(
                   left: 12,
                   top: 12,
-                  child: Row(
-                    children: [
-                      Material(
-                        color: Colors.black45,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: InkWell(
-                          onTap: _handleBack,
-                          borderRadius: BorderRadius.circular(8),
-                          child: const Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: Icon(Icons.arrow_back, color: Colors.white),
-                          ),
-                        ),
+                  child: Material(
+                    color: Colors.black45,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: InkWell(
+                      onTap: _handleBack,
+                      borderRadius: BorderRadius.circular(8),
+                      child: const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Icon(Icons.arrow_back, color: Colors.white),
                       ),
-                      const SizedBox(width: 8),
-                      Material(
-                        color: Colors.black45,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: InkWell(
-                          onTap: _downloadCurrentFrame,
-                          borderRadius: BorderRadius.circular(8),
-                          child: const Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: Icon(Icons.download, color: Colors.white),
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
                 Positioned(
