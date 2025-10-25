@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:html' as html;
 // import 'dart:math' as math; // not needed
 import '../services/functions_api.dart';
 import '../services/music_player.dart';
@@ -170,6 +171,33 @@ class _ComicViewerPageState extends State<ComicViewerPage>
         globalMusicPlayer.stop();
       } catch (_) {}
       if (mounted) Navigator.of(context).pop();
+    }
+  }
+
+  void _downloadCurrentFrame() {
+    if (frames.isEmpty || idx >= frames.length) return;
+    final imageUrl = frames[idx]['imageUrl'] as String? ?? '';
+    if (imageUrl.isEmpty) return;
+
+    // Create an anchor element with download attribute
+    final anchor = html.AnchorElement()
+      ..href = imageUrl
+      ..download = 'comic_page_${idx + 1}.jpg' // Default extension
+      ..style.display = 'none';
+
+    // Add to document body, click it, and remove it
+    html.document.body?.append(anchor);
+    anchor.click();
+    anchor.remove();
+
+    // Show a snackbar to confirm download started
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Download started...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -871,23 +899,42 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                   ),
 
                 // small bottom-corner buttons for mobile (thumb-reachable)
-                // translucent top-left back button
+                // translucent top-left buttons
                 Positioned(
                   left: 12,
                   top: 12,
-                  child: Material(
-                    color: Colors.black45,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: InkWell(
-                      onTap: _handleBack,
-                      borderRadius: BorderRadius.circular(8),
-                      child: const Padding(
-                        padding: EdgeInsets.all(8.0),
-                        child: Icon(Icons.arrow_back, color: Colors.white),
+                  child: Row(
+                    children: [
+                      Material(
+                        color: Colors.black45,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: InkWell(
+                          onTap: _handleBack,
+                          borderRadius: BorderRadius.circular(8),
+                          child: const Padding(
+                            padding: EdgeInsets.all(8.0),
+                            child: Icon(Icons.arrow_back, color: Colors.white),
+                          ),
+                        ),
                       ),
-                    ),
+                      const SizedBox(width: 8),
+                      Material(
+                        color: Colors.black45,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: InkWell(
+                          onTap: _downloadCurrentFrame,
+                          borderRadius: BorderRadius.circular(8),
+                          child: const Padding(
+                            padding: EdgeInsets.all(8.0),
+                            child: Icon(Icons.download, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 Positioned(
