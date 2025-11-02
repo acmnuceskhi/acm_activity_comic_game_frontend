@@ -33,11 +33,6 @@ class _CodeEntryPageState extends State<CodeEntryPage>
       vsync: this,
       duration: const Duration(seconds: 6),
     )..repeat(reverse: true);
-    // load initial code from provider (already loaded in main)
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final as = Provider.of<AppState>(context, listen: false);
-      if (as.code.isNotEmpty) _ctrl.text = as.code;
-    });
     // start fetching config and initializing background video immediately
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initBackgroundFromConfig();
@@ -220,9 +215,9 @@ class _CodeEntryPageState extends State<CodeEntryPage>
         String friendly;
         if (serverMsg.isEmpty) {
           friendly = 'Invalid or expired code. Please check and try again.';
-    } else if (serverMsg.toLowerCase().contains('not found') ||
-      serverMsg.toLowerCase().contains('no response') ||
-      serverMsg.toLowerCase().contains('invalid')) {
+        } else if (serverMsg.toLowerCase().contains('not found') ||
+            serverMsg.toLowerCase().contains('no response') ||
+            serverMsg.toLowerCase().contains('invalid')) {
           friendly = 'Code not recognized. Please check and try again.';
         } else if (serverMsg.toLowerCase().contains('expired') ||
             serverMsg.toLowerCase().contains('finished')) {
@@ -294,6 +289,8 @@ class _CodeEntryPageState extends State<CodeEntryPage>
           ),
         ),
       );
+
+      _ctrl.clear();
     } catch (e, st) {
       // log internal error for debugging, but show a friendly message to the user
       print('CodeEntryPage._submit exception: $e');
@@ -328,6 +325,7 @@ class _CodeEntryPageState extends State<CodeEntryPage>
           )!;
           return Stack(
             children: [
+              // show asset image while background video initializes
               Container(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
@@ -443,9 +441,8 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                             await launchUrl(url);
                           },
                           child: Text(
-                            'Register new code',
+                            'Get your code',
                             style: TextStyle(
-                              decoration: TextDecoration.underline,
                               color: Theme.of(
                                 context,
                               ).colorScheme.primary.withValues(alpha: 0.8),

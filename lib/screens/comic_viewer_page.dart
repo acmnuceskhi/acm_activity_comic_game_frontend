@@ -1,10 +1,11 @@
+import 'dart:ui' as ui;
+
+import 'package:acm_activity_comic_game_frontend/route_observer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart';
-// import 'dart:math' as math; // not needed
+import 'package:video_player/video_player.dart';
 import '../services/functions_api.dart';
 import '../services/music_player.dart';
-import 'package:vector_math/vector_math_64.dart' show Matrix4;
 import 'package:provider/provider.dart';
 import '../services/app_state.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -29,32 +30,10 @@ class ComicViewerPage extends StatefulWidget {
 }
 
 class _ComicViewerPageState extends State<ComicViewerPage>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin, RouteAware {
   final FunctionsApi _api = FunctionsApi();
   late List<dynamic> frames;
   late List<dynamic> questions;
-
-  // Web-specific debug overlay
-  void _webDebug(String message) {
-    if (kIsWeb) {
-      html.window.console.log(message);
-      // Also show in page for release debugging
-      final div = html.document.createElement('div') as html.DivElement;
-      div.style
-        ..position = 'fixed'
-        ..top = '40px'
-        ..right = '0'
-        ..backgroundColor = 'rgba(0,0,0,0.8)'
-        ..color = 'white'
-        ..padding = '8px'
-        ..zIndex = '9999'
-        ..fontSize = '12px'
-        ..maxWidth = '400px'
-        ..overflow = 'auto';
-      div.text = message;
-      html.document.body?.children.add(div);
-    }
-  }
 
   int idx = 0;
   bool _showingQuestion = false;
@@ -73,10 +52,23 @@ class _ComicViewerPageState extends State<ComicViewerPage>
   double _frameW = 0, _frameH = 0, _frameLeft = 0, _frameTop = 0;
   // cache intrinsic sizes for element images keyed by imageUrl
   final Map<String, Size> _elemIntrinsicCache = {};
+  bool _bgVideoReady = false;
 
   @override
   void initState() {
     super.initState();
+    _animmController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 6),
+    )..repeat(reverse: true);
+    // start fetching config and initializing background video immediately
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initBackgroundFromConfig();
+      // subscribe to route changes so we can resume video when returning
+      final modal = ModalRoute.of(context);
+      if (modal != null) routeObserver.subscribe(this, modal);
+    });
+
     frames = List.from(widget.initialFrames);
     questions = List.from(widget.initialQuestions);
     _animController = AnimationController(
@@ -109,6 +101,82 @@ class _ComicViewerPageState extends State<ComicViewerPage>
     globalMusicPlayer.stop();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  Future<void> _initBackgroundFromConfig() async {
+    try {
+      print('DEBUG: initBackgroundFromConfig - start');
+      final cfgRes = await _api.fetchConfig();
+      print(
+        'DEBUG: initBackgroundFromConfig - response: ${cfgRes.runtimeType}',
+      );
+      if (cfgRes['success'] == true) {
+        final bg = cfgRes['backgroundImageUrl'] as String?;
+        final bv = cfgRes['backgroundVideoUrl'] as String?;
+        print(
+          'DEBUG: initBackgroundFromConfig - image present=${bg != null && bg.isNotEmpty} video present=${bv != null && bv.isNotEmpty}',
+        );
+        if (bg != null && bg.isNotEmpty) {
+          final as = Provider.of<AppState>(context, listen: false);
+          await as.setBackgroundImageUrl(bg);
+          print('DEBUG: initBackgroundFromConfig set backgroundImageUrl: $bg');
+        }
+        if (bv != null && bv.isNotEmpty) {
+          print(
+            'DEBUG: initBackgroundFromConfig - backgroundVideoUrl found: $bv',
+          );
+          if (_bgVideoController != null) {
+            try {
+              print(
+                'DEBUG: disposing previous bg controller before init in initBackgroundFromConfig',
+              );
+              await _bgVideoController!.dispose();
+            } catch (e) {
+              print('DEBUG: error disposing previous controller: $e');
+            }
+          }
+          try {
+            _bgVideoReady = false;
+            _bgVideoController = VideoPlayerController.network(bv);
+            print(
+              'DEBUG: initializing bgVideoController (initBackgroundFromConfig)',
+            );
+            await _bgVideoController!.initialize().timeout(
+              const Duration(seconds: 12),
+              onTimeout: () {
+                throw Exception('Video initialization timed out');
+              },
+            );
+            print(
+              'DEBUG: bgVideoController initialized successfully in initBackgroundFromConfig',
+            );
+            _bgVideoController!.setLooping(true);
+            _bgVideoController!.setVolume(0.0);
+            await _bgVideoController!.play();
+            _bgVideoReady = true;
+            print(
+              'DEBUG: Background video is now playing (initBackgroundFromConfig)',
+            );
+          } catch (e, st) {
+            print(
+              'DEBUG: Failed to init/play background video in initBackgroundFromConfig: $e\n$st',
+            );
+            try {
+              await _bgVideoController?.dispose();
+            } catch (_) {}
+            _bgVideoController = null;
+            _bgVideoReady = false;
+          }
+        }
+      } else {
+        print(
+          'DEBUG: initBackgroundFromConfig returned success!=true: $cfgRes',
+        );
+      }
+      print('DEBUG: initBackgroundFromConfig - end');
+    } catch (e, st) {
+      print('DEBUG: initBackgroundFromConfig failed: $e\n$st');
+    }
   }
 
   void _onKey(RawKeyEvent ev) {
@@ -709,6 +777,9 @@ class _ComicViewerPageState extends State<ComicViewerPage>
 
   // overlay method removed: rendering now uses translation-based stacking
 
+  late final AnimationController _animmController;
+  VideoPlayerController? _bgVideoController;
+
   @override
   Widget build(BuildContext context) {
     // Manage focus so that on mobile the dialog's TextField can receive
@@ -737,78 +808,199 @@ class _ComicViewerPageState extends State<ComicViewerPage>
             if (frames.isEmpty || _showFinishedScreen) {
               // If the backend indicated finished or local flag is set, show finish UI
               if (widget.finished || _showFinishedScreen) {
-                return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        'The End!',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
+                return AnimatedBuilder(
+                  animation: _animmController,
+                  builder: (context, child) {
+                    final v = _animmController.value;
+                    final begin = Alignment.lerp(
+                      Alignment.topLeft,
+                      Alignment.topRight,
+                      v,
+                    )!;
+                    final end = Alignment.lerp(
+                      Alignment.bottomRight,
+                      Alignment.bottomLeft,
+                      v,
+                    )!;
+                    return Stack(
+                      children: [
+                        Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                const Color.fromARGB(
+                                  255,
+                                  225,
+                                  49,
+                                  0,
+                                ), // light yellow
+                                const Color.fromARGB(
+                                  255,
+                                  255,
+                                  208,
+                                  0,
+                                ), // dirty yellow
+                              ],
+                              begin: begin,
+                              end: end,
+                            ),
+                          ),
+                        ),
+                        if (_bgVideoReady &&
+                            _bgVideoController != null &&
+                            _bgVideoController!.value.isInitialized)
+                          Positioned.fill(
+                            child: FittedBox(
+                              fit: BoxFit.cover,
+                              child: SizedBox(
+                                width: _bgVideoController!.value.size.width,
+                                height: _bgVideoController!.value.size.height,
+                                child: VideoPlayer(_bgVideoController!),
+                              ),
+                            ),
+                          ),
+                        Positioned.fill(child: child!),
+                      ],
+                    );
+                  },
+                  child: Center(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: BackdropFilter(
+                        filter: ui.ImageFilter.blur(sigmaX: 6.0, sigmaY: 6.0),
+                        child: Container(
+                          width: MediaQuery.of(context).size.width * 0.85 < 600
+                              ? MediaQuery.of(context).size.width * 0.85
+                              : 600,
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2C2A1F).withValues(
+                              alpha: 0.85,
+                            ), // Dark complementary color
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.14),
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.25),
+                                blurRadius: 12,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'The End!',
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.primary, // Match background
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.primary,
+                                  foregroundColor: const Color(0xFF2C2A1F),
+                                  elevation: 4,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 24,
+                                    vertical: 12,
+                                  ),
+                                ),
+                                onPressed: () async {
+                                  try {
+                                    setState(() {
+                                      _loading = true;
+                                    });
+                                    final r = await _api.resetProgress(
+                                      widget.code,
+                                    );
+                                    print('resetProgress response: $r');
+                                    if (r['success'] == true) {
+                                      setState(() {
+                                        _showFinishedScreen = false;
+                                      });
+                                      await _refetchFrames();
+                                    } else {
+                                      if (mounted) {
+                                        showDialog<void>(
+                                          context: context,
+                                          builder: (c) => AlertDialog(
+                                            title: const Text('Error'),
+                                            content: Text(
+                                              r['message']?.toString() ??
+                                                  'Failed to reset',
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.of(c).pop(),
+                                                child: const Text('OK'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      }
+                                    }
+                                  } catch (e) {
+                                    print('resetProgress failed: $e');
+                                    if (mounted) {
+                                      showDialog<void>(
+                                        context: context,
+                                        builder: (c) => AlertDialog(
+                                          title: const Text('Error'),
+                                          content: Text(
+                                            'Failed to reset progress: $e',
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () =>
+                                                  Navigator.of(c).pop(),
+                                              child: const Text('OK'),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }
+                                  } finally {
+                                    if (mounted)
+                                      setState(() {
+                                        _loading = false;
+                                      });
+                                  }
+                                },
+                                child: _loading
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                Color(0xFF2C2A1F),
+                                              ),
+                                        ),
+                                      )
+                                    : const Text(
+                                        'Play Again',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      ElevatedButton(
-                        onPressed: () async {
-                          try {
-                            setState(() {
-                              _loading = true;
-                            });
-                            final r = await _api.resetProgress(widget.code);
-                            print('resetProgress response: $r');
-                            if (r['success'] == true) {
-                              setState(() {
-                                _showFinishedScreen = false;
-                              });
-                              await _refetchFrames();
-                            } else {
-                              if (mounted) {
-                                showDialog<void>(
-                                  context: context,
-                                  builder: (c) => AlertDialog(
-                                    title: const Text('Error'),
-                                    content: Text(
-                                      r['message']?.toString() ??
-                                          'Failed to reset',
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.of(c).pop(),
-                                        child: const Text('OK'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }
-                            }
-                          } catch (e) {
-                            print('resetProgress failed: $e');
-                            if (mounted) {
-                              showDialog<void>(
-                                context: context,
-                                builder: (c) => AlertDialog(
-                                  title: const Text('Error'),
-                                  content: Text('Failed to reset progress: $e'),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.of(c).pop(),
-                                      child: const Text('OK'),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }
-                          } finally {
-                            if (mounted)
-                              setState(() {
-                                _loading = false;
-                              });
-                          }
-                        },
-                        child: const Text('Play Again'),
-                      ),
-                    ],
+                    ),
                   ),
                 );
               }
@@ -962,22 +1154,19 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                 Positioned(
                   left: 12,
                   bottom: 12,
-                  child: Visibility(
-                    visible: MediaQuery.of(context).size.width < 600,
-                    child: Material(
-                      color: Colors.black45,
-                      shape: const CircleBorder(),
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: _handlePrev,
-                        child: const SizedBox(
-                          width: 56,
-                          height: 56,
-                          child: Icon(
-                            Icons.arrow_left,
-                            color: Colors.white,
-                            size: 32,
-                          ),
+                  child: Material(
+                    color: Colors.black45,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: _handlePrev,
+                      child: const SizedBox(
+                        width: 56,
+                        height: 56,
+                        child: Icon(
+                          Icons.arrow_left,
+                          color: Colors.white,
+                          size: 32,
                         ),
                       ),
                     ),
@@ -986,22 +1175,19 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                 Positioned(
                   right: 12,
                   bottom: 12,
-                  child: Visibility(
-                    visible: MediaQuery.of(context).size.width < 600,
-                    child: Material(
-                      color: Colors.black45,
-                      shape: const CircleBorder(),
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: _handleNext,
-                        child: const SizedBox(
-                          width: 56,
-                          height: 56,
-                          child: Icon(
-                            Icons.arrow_right,
-                            color: Colors.white,
-                            size: 32,
-                          ),
+                  child: Material(
+                    color: Colors.black45,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: _handleNext,
+                      child: const SizedBox(
+                        width: 56,
+                        height: 56,
+                        child: Icon(
+                          Icons.arrow_right,
+                          color: Colors.white,
+                          size: 32,
                         ),
                       ),
                     ),
