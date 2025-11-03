@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 class AppState extends ChangeNotifier {
   String _code = '';
   String? _backgroundImageUrl;
+  String? _uid;
 
   String? get backgroundImageUrl => _backgroundImageUrl;
 
@@ -44,6 +45,26 @@ class AppState extends ChangeNotifier {
         );
       } catch (_) {}
     }
+  }
+
+  // Persisted Firebase Auth UID (optional local cache)
+  String? get uid => _uid;
+
+  Future<void> setUid(String? u) async {
+    _uid = (u != null && u.isNotEmpty) ? u : null;
+    final sp = await SharedPreferences.getInstance();
+    if (_uid != null) {
+      await sp.setString('uid', _uid!);
+    } else {
+      await sp.remove('uid');
+    }
+    notifyListeners();
+  }
+
+  Future<void> loadUid() async {
+    final sp = await SharedPreferences.getInstance();
+    _uid = sp.getString('uid');
+    notifyListeners();
   }
 
   // Note: fetching the remote config requires cloud_firestore in the app.

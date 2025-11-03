@@ -39,6 +39,30 @@ class FunctionsApi {
     }
   }
 
+  // New: idToken-aware variant for authenticated flows. If idToken provided,
+  // send Authorization: Bearer <idToken>. If code is provided, include it
+  // as a fallback query parameter for compatibility.
+  Future<Map<String, dynamic>> getNextFramesAuth({String? idToken, String? code}) async {
+    Uri uri = Uri.parse(getNextUrl);
+    if (code != null) uri = uri.replace(queryParameters: {'code': code});
+    try {
+      final headers = <String, String>{};
+      if (idToken != null && idToken.isNotEmpty) headers['Authorization'] = 'Bearer $idToken';
+      final r = await http.get(uri, headers: headers);
+      if (r.statusCode != 200) {
+        print('FunctionsApi.getNextFramesAuth ERROR: HTTP ${r.statusCode}');
+        print('URL: $uri');
+        print('Response body: ${r.body}');
+        throw Exception('getNextFrames failed: HTTP ${r.statusCode}');
+      }
+      return jsonDecode(r.body) as Map<String, dynamic>;
+    } catch (e, st) {
+      print('FunctionsApi.getNextFramesAuth exception: $e');
+      print(st);
+      rethrow;
+    }
+  }
+
   Future<Map<String, dynamic>> getMusicLibrary() async {
     final uri = Uri.parse(getMusicLibraryUrl);
     try {
@@ -58,23 +82,26 @@ class FunctionsApi {
   }
 
   Future<Map<String, dynamic>> submitAnswer({
-    required String code,
+    String? idToken,
+    String? code,
     required String questionSetId,
     required String questionId,
     required String answer,
   }) async {
     final uri = Uri.parse(submitUrl);
     final payload = {
-      'code': code,
+      if (code != null) 'code': code,
       'questionSetId': questionSetId,
       'questionId': questionId,
       'answer': answer,
     };
     try {
+      final headers = {'Content-Type': 'application/json'};
+      if (idToken != null && idToken.isNotEmpty) headers['Authorization'] = 'Bearer $idToken';
       final r = await http.post(
         uri,
         body: jsonEncode(payload),
-        headers: {'Content-Type': 'application/json'},
+        headers: headers,
       );
       if (r.statusCode != 200) {
         print('FunctionsApi.submitAnswer ERROR: HTTP ${r.statusCode}');
@@ -109,13 +136,15 @@ class FunctionsApi {
     }
   }
 
-  Future<Map<String, dynamic>> resetProgress(String code) async {
+  Future<Map<String, dynamic>> resetProgress({String? idToken, String? code}) async {
     final uri = Uri.parse(resetProgressUrl);
     try {
+      final headers = {'Content-Type': 'application/json'};
+      if (idToken != null && idToken.isNotEmpty) headers['Authorization'] = 'Bearer $idToken';
       final r = await http.post(
         uri,
-        body: jsonEncode({'code': code}),
-        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({if (code != null) 'code': code}),
+        headers: headers,
       );
       if (r.statusCode != 200) {
         print('FunctionsApi.resetProgress ERROR: HTTP ${r.statusCode}');

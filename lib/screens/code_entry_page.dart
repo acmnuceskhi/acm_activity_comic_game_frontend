@@ -1,4 +1,9 @@
+// ignore_for_file: avoid_print
+
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:ui' as ui;
@@ -22,9 +27,17 @@ class _CodeEntryPageState extends State<CodeEntryPage>
   String? _error;
   bool _loading = false;
   final _api = FunctionsApi();
+  // Google sign-in state
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final GoogleSignIn _googleSignIn = GoogleSignIn();
+  bool _signedIn = false;
+  String? _userName;
+  String? _userEmail;
+  bool _isSigningIn = false;
   late final AnimationController _animController;
   VideoPlayerController? _bgVideoController;
   bool _bgVideoReady = false;
+  String? idToken;
 
   @override
   void initState() {
@@ -118,16 +131,207 @@ class _CodeEntryPageState extends State<CodeEntryPage>
     }
   }
 
+  // ...existing sign-in logic is implemented in _signInWithGoogleAndStart()
+
+  Future<void> _signInWithGoogle() async {
+    try {
+      setState(() {
+        _isSigningIn = true;
+        _error = null;
+      });
+
+      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+      if (googleUser == null) return; // user cancelled
+
+      final googleAuth = await googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      final userCred = await _auth.signInWithCredential(credential);
+      final user = userCred.user;
+      final String? emailRaw = user?.email ?? googleUser.email;
+      if (emailRaw == null) {
+        try {
+          await _auth.signOut();
+        } catch (_) {}
+        try {
+          await _googleSignIn.signOut();
+        } catch (_) {}
+        if (mounted) {
+          setState(() {
+            _error = 'Failed to obtain email from Google account.';
+          });
+        }
+        return;
+      }
+
+      final email = emailRaw.toLowerCase();
+      setState(() {
+        _signedIn = true;
+        _userName = user?.displayName ?? googleUser.displayName ?? '';
+        _userEmail = email;
+      });
+
+      // obtain ID token and call backend
+      idToken = await user!.getIdToken();
+
+      // persist uid locally
+      // ignore: use_build_context_synchronously
+      final as = Provider.of<AppState>(context, listen: false);
+      await as.setUid(user.uid);
+      print("UID: ${as.uid}");
+    } catch (e, st) {
+      if (kDebugMode) {
+        print('CodeEntryPage._signInWithGoogleAndStart exception: $e');
+        print(st);
+      }
+      if (mounted) {
+        setState(() {
+          _error = 'Sign-in failed. Please try again.';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSigningIn = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _start() async {
+    if (_signedIn) {
+      try {
+        setState(() {
+          _loading = true;
+        });
+
+        final as = Provider.of<AppState>(context, listen: false);
+
+        Map<String, dynamic> res;
+        try {
+          res = await _api.getNextFramesAuth(idToken: idToken);
+        } catch (e) {
+          if (kDebugMode) {
+            print('FunctionsApi.getNextFrames threw: $e');
+          }
+          if (mounted) {
+            setState(() {
+              _error = 'Failed to fetch game data. Try again later.';
+            });
+          }
+          return;
+        }
+
+        // preload music
+        try {
+          final mus = await _api.getMusicLibrary();
+          if (mus['success'] == true && mus['musics'] is Map) {
+            final map = Map<String, dynamic>.from(mus['musics']);
+            final cast = <String, String>{};
+            map.forEach((k, v) {
+              if (v is String) cast[k] = v;
+            });
+            globalMusicPlayer.preload(cast);
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('Failed to preload music library: $e');
+          }
+        }
+
+        final frames = res['frames'] as List<dynamic>? ?? [];
+        final questions = res['questions'] as List<dynamic>? ?? [];
+        final finished = res['finished'] == true;
+
+        if (!mounted) return;
+        if (_bgVideoController != null) {
+          try {
+            await _bgVideoController!.pause();
+          } catch (_) {}
+          try {
+            await _bgVideoController!.dispose();
+          } catch (_) {}
+          _bgVideoController = null;
+          _bgVideoReady = false;
+        }
+        if (mounted) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ComicViewerPage(
+                uid: as.uid ?? '',
+                initialFrames: frames,
+                initialQuestions: questions,
+                finished: finished,
+              ),
+            ),
+          );
+        }
+      } catch (e, st) {
+        if (kDebugMode) {
+          print('CodeEntryPage._signInWithGoogleAndStart exception: $e');
+          print(st);
+        }
+        if (mounted) {
+          setState(() {
+            _error = 'Sign-in failed. Please try again.';
+          });
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _loading = false;
+          });
+        }
+      }
+    }
+  }
+
+  Future<void> _signInAndStart() async {
+    await _signInWithGoogle();
+    print("calling start");
+    await _start();
+    print("start called.");
+  }
+
+  Future<void> _signOut() async {
+    try {
+      await _googleSignIn.signOut();
+    } catch (_) {}
+    try {
+      await _auth.signOut();
+    } catch (_) {}
+    if (context.mounted) {
+      // ignore: use_build_context_synchronously
+      final as = Provider.of<AppState>(context, listen: false);
+      await as.setUid(null);
+    }
+
+    if (mounted) {
+      setState(() {
+        _signedIn = false;
+        _userName = null;
+        _userEmail = null;
+      });
+    }
+  }
+
   @override
   void dispose() {
     _ctrl.dispose();
     _animController.dispose();
     if (_bgVideoController != null) {
       try {
-        print('DEBUG: disposing background video controller');
+        if (kDebugMode) {
+          print('DEBUG: disposing background video controller');
+        }
         _bgVideoController!.dispose();
       } catch (e) {
-        print('DEBUG: error disposing bg video controller: $e');
+        if (kDebugMode) {
+          print('DEBUG: error disposing bg video controller: $e');
+        }
       }
     }
     super.dispose();
@@ -137,7 +341,11 @@ class _CodeEntryPageState extends State<CodeEntryPage>
   void didPopNext() {
     // Called when the top route has been popped and this route shows up again.
     // Re-init the background video so it resumes playing on the entry page.
-    print('DEBUG: CodeEntryPage.didPopNext - reinitializing background video');
+    if (kDebugMode) {
+      print(
+        'DEBUG: CodeEntryPage.didPopNext - reinitializing background video',
+      );
+    }
     // Fire off re-init but don't await here.
     _initBackgroundFromConfig();
   }
@@ -157,152 +365,6 @@ class _CodeEntryPageState extends State<CodeEntryPage>
       routeObserver.unsubscribe(this);
     } catch (_) {}
     super.deactivate();
-  }
-
-  Future<void> _submit() async {
-    final code = _ctrl.text.trim();
-    // guard: don't submit empty code
-    if (code.isEmpty) {
-      setState(() {
-        _error = 'Please enter your registration code';
-      });
-      return;
-    }
-
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      Map<String, dynamic> res;
-      try {
-        res = await _api.getNextFrames(code);
-      } catch (e) {
-        // Map common errors to friendly messages instead of raw exception
-        print('FunctionsApi.getNextFrames threw: $e');
-        String friendly;
-        final msg = e.toString().toLowerCase();
-        if (msg.contains('404') || msg.contains('not found')) {
-          friendly = 'Code not recognized. Please check and try again.';
-        } else if (msg.contains('400') || msg.contains('bad request')) {
-          friendly = 'Invalid code format. Please check and try again.';
-        } else if (msg.contains('timed out') || msg.contains('timeout')) {
-          friendly = 'Request timed out. Check your connection and try again.';
-        } else {
-          friendly = 'Failed to validate code. Please try again later.';
-        }
-        if (mounted)
-          setState(() {
-            _error = friendly;
-            _loading = false;
-          });
-        return;
-      }
-      // debug: log cached background URL and fetched frames info
-      try {
-        final appState = Provider.of<AppState>(context, listen: false);
-        print(
-          'DEBUG: AppState.backgroundImageUrl=${appState.backgroundImageUrl}',
-        );
-      } catch (e) {
-        print('DEBUG: failed to read AppState background url: $e');
-      }
-      if (res['success'] != true) {
-        // log response for debugging
-        print('getNextFrames returned success!=true for code=$code: $res');
-        // map server response to a user-friendly message
-        final serverMsg = res['message']?.toString() ?? '';
-        String friendly;
-        if (serverMsg.isEmpty) {
-          friendly = 'Invalid or expired code. Please check and try again.';
-        } else if (serverMsg.toLowerCase().contains('not found') ||
-            serverMsg.toLowerCase().contains('no response') ||
-            serverMsg.toLowerCase().contains('invalid')) {
-          friendly = 'Code not recognized. Please check and try again.';
-        } else if (serverMsg.toLowerCase().contains('expired') ||
-            serverMsg.toLowerCase().contains('finished')) {
-          friendly = 'This code has already been used or has expired.';
-        } else {
-          // fallback short message
-          friendly = 'Could not validate code. Please try again later.';
-        }
-
-        setState(() {
-          _error = friendly;
-          _loading = false;
-        });
-        return;
-      }
-      // persist to provider (which saves to shared_preferences)
-      final as = Provider.of<AppState>(context, listen: false);
-      await as.setCode(code);
-
-      // preload music library in background (web-only)
-      try {
-        final mus = await _api.getMusicLibrary();
-        if (mus['success'] == true && mus['musics'] is Map) {
-          final map = Map<String, dynamic>.from(mus['musics']);
-          final cast = <String, String>{};
-          map.forEach((k, v) {
-            if (v is String) cast[k] = v;
-          });
-          // don't await heavy preload on UI thread; start in background
-          globalMusicPlayer.preload(cast);
-        }
-      } catch (e) {
-        print('Failed to preload music library: $e');
-      }
-
-      // navigate to viewer with received frames
-      final frames = res['frames'] as List<dynamic>? ?? [];
-      final questions = res['questions'] as List<dynamic>? ?? [];
-      final finished = res['finished'] == true;
-      print(
-        'DEBUG: getNextFrames fetched ${frames.length} frames, finished=$finished at ${DateTime.now().toIso8601String()}',
-      );
-      // config is fetched on page load; no need to refetch here
-      if (!mounted) return;
-      // Ensure background video does not continue playing under the viewer.
-      if (_bgVideoController != null) {
-        try {
-          print('DEBUG: stopping background video before navigation');
-          await _bgVideoController!.pause();
-        } catch (e) {
-          print('DEBUG: error pausing bg video: $e');
-        }
-        try {
-          await _bgVideoController!.dispose();
-        } catch (e) {
-          print('DEBUG: error disposing bg video before navigation: $e');
-        }
-        _bgVideoController = null;
-        _bgVideoReady = false;
-      }
-
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ComicViewerPage(
-            code: code,
-            initialFrames: frames,
-            initialQuestions: questions,
-            finished: finished,
-          ),
-        ),
-      );
-
-      _ctrl.clear();
-    } catch (e, st) {
-      // log internal error for debugging, but show a friendly message to the user
-      print('CodeEntryPage._submit exception: $e');
-      print(st);
-      if (mounted) {
-        setState(() {
-          _error = 'Request failed. Please try again.';
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
   }
 
   @override
@@ -385,99 +447,55 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      'Enter Registration Code',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.primary, // Match background
-                      ),
+                      "Comic Game Title",
+                      style: Theme.of(
+                        context,
+                      ).textTheme.displayLarge!.copyWith(color: Colors.white),
                     ),
-                    const SizedBox(height: 20),
-                    TextField(
-                      controller: _ctrl,
-                      decoration: InputDecoration(
-                        labelText: 'Code',
-                        labelStyle: TextStyle(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.primary.withValues(alpha: 0.7),
-                        ),
-                        errorText: _error,
-                        filled: true,
-                        fillColor: Colors.white.withValues(alpha: 0.06),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide.none,
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.primary.withValues(alpha: 0.3),
-                          ),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                      ),
-                      style: const TextStyle(color: Colors.white),
-                      onSubmitted: (_) => _submit(),
-                    ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 12),
+                    // Google Sign-in button
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        TextButton(
-                          onPressed: () async {
-                            Uri url = Uri.parse(
-                              'https://www.activities.acmnuceskhi.com/',
-                            );
-                            await launchUrl(url);
-                          },
-                          child: Text(
-                            'Get your code',
-                            style: TextStyle(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.primary.withValues(alpha: 0.8),
-                            ),
-                          ),
-                        ),
-                        ElevatedButton(
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.account_circle),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Theme.of(
-                              context,
-                            ).colorScheme.primary,
-                            foregroundColor: const Color(0xFF2C2A1F),
-                            elevation: 4,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 24,
-                              vertical: 12,
+                            backgroundColor: Colors.black.withValues(
+                              alpha: 0.5,
                             ),
+                            padding: EdgeInsets.all(18),
                           ),
-                          onPressed: _loading ? null : _submit,
-                          child: _loading
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      Color(0xFF2C2A1F),
-                                    ),
-                                  ),
-                                )
-                              : const Text(
-                                  'Continue',
-                                  style: TextStyle(fontWeight: FontWeight.bold),
-                                ),
+                          label: Text(
+                            _isSigningIn
+                                ? "Signing in.."
+                                : _loading
+                                ? "Starting..."
+                                : _signedIn
+                                ? 'Play as ${_userName}'
+                                : 'Sign in with Google',
+                          ),
+                          onPressed: _isSigningIn
+                              ? () {}
+                              : _signedIn
+                              ? _start
+                              : _signInAndStart,
                         ),
+
+                        if (_signedIn) SizedBox(width: 20),
+                        if (_signedIn)
+                          IconButton(
+                            icon: Icon(
+                              Icons.logout,
+                              size: 20,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.black.withValues(
+                                alpha: 0.5,
+                              ),
+                            ),
+                            onPressed: _signOut,
+                          ),
                       ],
                     ),
                   ],

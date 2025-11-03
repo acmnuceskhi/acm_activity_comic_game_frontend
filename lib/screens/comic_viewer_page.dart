@@ -9,17 +9,17 @@ import '../services/music_player.dart';
 import 'package:provider/provider.dart';
 import '../services/app_state.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'dart:html' as html;
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ComicViewerPage extends StatefulWidget {
-  final String code;
+  final String uid;
   final List<dynamic> initialFrames;
   final List<dynamic> initialQuestions;
   final bool finished;
 
   const ComicViewerPage({
     super.key,
-    required this.code,
+    required this.uid,
     required this.initialFrames,
     required this.initialQuestions,
     required this.finished,
@@ -402,8 +402,11 @@ class _ComicViewerPageState extends State<ComicViewerPage>
       );
 
       try {
+        // Use Firebase ID token for authenticated submit
+        final user = FirebaseAuth.instance.currentUser;
+        final idToken = (user != null) ? await user.getIdToken() : null;
         final res = await _api.submitAnswer(
-          code: widget.code,
+          idToken: idToken,
           questionSetId: qForFrame['setId'],
           questionId: question['id'].toString(),
           answer: answerCtrl.text.trim(),
@@ -492,7 +495,12 @@ class _ComicViewerPageState extends State<ComicViewerPage>
   }
 
   Future<void> _refetchFrames() async {
-    final res = await _api.getNextFrames(widget.code);
+  // Try authenticated fetch with ID token, fall back to code-based fetch
+  final user = FirebaseAuth.instance.currentUser;
+  final idToken = (user != null) ? await user.getIdToken() : null;
+  final res = (idToken != null)
+    ? await _api.getNextFramesAuth(idToken: idToken)
+    : await _api.getNextFrames(widget.uid);
     print('getNextFrames response: $res');
     try {
       final framesCount = (res['frames'] is List)
@@ -920,8 +928,13 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                                     setState(() {
                                       _loading = true;
                                     });
+                                    final user =
+                                        FirebaseAuth.instance.currentUser;
+                                    final idToken = (user != null)
+                                        ? await user.getIdToken()
+                                        : null;
                                     final r = await _api.resetProgress(
-                                      widget.code,
+                                      idToken: idToken,
                                     );
                                     print('resetProgress response: $r');
                                     if (r['success'] == true) {
