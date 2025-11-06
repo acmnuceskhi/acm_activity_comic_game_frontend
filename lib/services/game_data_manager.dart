@@ -50,8 +50,8 @@ class GameDataManager {
     finished = res['finished'] == true;
     version = (res['version'] is num) ? (res['version'] as num).toInt() : 0;
 
-    // Start preloading images prioritizing from progressIndex onward
-    await _preloadAllImages();
+  // Kick off preloading in background; don't block start
+  unawaited(_preloadAllImages());
   }
 
   Future<void> _preloadAllImages() async {

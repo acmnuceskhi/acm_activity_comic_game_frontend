@@ -956,10 +956,26 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                                     );
                                     print('resetProgress response: $r');
                                     if (r['success'] == true) {
-                                      setState(() {
-                                        _showFinishedScreen = false;
-                                      });
-                                      await _refetchFrames();
+                                      // Reset local state to start of the story without refetching
+                                      if (mounted) {
+                                        setState(() {
+                                          // If we have a manager (bulk data loaded), reset its progress hint
+                                          try {
+                                            widget.manager?.progressIndex = -1;
+                                          } catch (_) {}
+                                          _showFinishedScreen = false;
+                                          if (frames.isNotEmpty) {
+                                            idx = 0;
+                                          }
+                                        });
+                                      }
+                                      // Play first frame's music immediately
+                                      try {
+                                        final mid = frames.isNotEmpty
+                                            ? frames[0]['musicId'] as String?
+                                            : null;
+                                        globalMusicPlayer.play(mid);
+                                      } catch (_) {}
                                     } else {
                                       if (mounted) {
                                         showDialog<void>(

@@ -168,7 +168,7 @@ class _CodeEntryPageState extends State<CodeEntryPage>
         return;
       }
 
-  // final email = emailRaw.toLowerCase();
+      // final email = emailRaw.toLowerCase();
       setState(() {
         _signedIn = true;
         _userName = user?.displayName ?? googleUser.displayName ?? '';
@@ -208,27 +208,29 @@ class _CodeEntryPageState extends State<CodeEntryPage>
           _loading = true;
         });
 
-  final as = Provider.of<AppState>(context, listen: false);
-  // Use bulk game data endpoint + preloader
-  final manager = GameDataManager();
+        final as = Provider.of<AppState>(context, listen: false);
+        // Use bulk game data endpoint + preloader
+        final manager = GameDataManager();
         await manager.fetchInitialData();
 
-        // preload music
-        try {
-          final mus = await _api.getMusicLibrary();
-          if (mus['success'] == true && mus['musics'] is Map) {
-            final map = Map<String, dynamic>.from(mus['musics']);
-            final cast = <String, String>{};
-            map.forEach((k, v) {
-              if (v is String) cast[k] = v;
-            });
-            globalMusicPlayer.preload(cast);
+        // Preload music non-blocking
+        () async {
+          try {
+            final mus = await _api.getMusicLibrary();
+            if (mus['success'] == true && mus['musics'] is Map) {
+              final map = Map<String, dynamic>.from(mus['musics']);
+              final cast = <String, String>{};
+              map.forEach((k, v) {
+                if (v is String) cast[k] = v;
+              });
+              await globalMusicPlayer.preload(cast);
+            }
+          } catch (e) {
+            if (kDebugMode) {
+              print('Failed to preload music library: $e');
+            }
           }
-        } catch (e) {
-          if (kDebugMode) {
-            print('Failed to preload music library: $e');
-          }
-        }
+        }();
 
         final frames = manager.frames;
         // Build questions list compatible with viewer's expectation
@@ -291,9 +293,10 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                 initialFrames: frames,
                 initialQuestions: questions,
                 finished: finished,
-        startIndex: ((manager.progressIndex + 1)
-            .clamp(0, frames.isNotEmpty ? (frames.length - 1) : 0))
-          .toInt(),
+                startIndex: ((manager.progressIndex + 1).clamp(
+                  0,
+                  frames.isNotEmpty ? (frames.length - 1) : 0,
+                )).toInt(),
                 manager: manager,
               ),
             ),
@@ -343,7 +346,7 @@ class _CodeEntryPageState extends State<CodeEntryPage>
       setState(() {
         _signedIn = false;
         _userName = null;
-  // _userEmail = null;
+        // _userEmail = null;
       });
     }
   }
@@ -452,43 +455,53 @@ class _CodeEntryPageState extends State<CodeEntryPage>
             borderRadius: BorderRadius.circular(16),
             child: BackdropFilter(
               filter: ui.ImageFilter.blur(sigmaX: 6.0, sigmaY: 6.0),
-              child: Container(
-                width: MediaQuery.of(context).size.width * 0.85 < 600
-                    ? MediaQuery.of(context).size.width * 0.85
+              child: SizedBox(
+                width:
+                    MediaQuery.of(context).size.width <
+                        MediaQuery.of(context).size.height
+                    ? MediaQuery.of(context).size.width * 0.9
+                    : MediaQuery.of(context).size.width * 0.6 < 600
+                    ? MediaQuery.of(context).size.width * 0.6
                     : 600,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: const Color(
-                    0xFF2C2A1F,
-                  ).withValues(alpha: 0.85), // Dark complementary color
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.14),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.25),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
+                // padding: const EdgeInsets.all(20),
+                // decoration: BoxDecoration(
+                //   color: const Color.fromARGB(
+                //     255,
+                //     0,
+                //     0,
+                //     0,
+                //   ).withValues(alpha: 0.7), // Dark complementary color
+                //   borderRadius: BorderRadius.circular(16),
+                //   border: Border.all(
+                //     color: Colors.white.withValues(alpha: 0.14),
+                //   ),
+                //   boxShadow: [
+                //     BoxShadow(
+                //       color: Colors.black.withValues(alpha: 0.25),
+                //       blurRadius: 12,
+                //       offset: const Offset(0, 6),
+                //     ),
+                //   ],
+                // ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    Text(
-                      "Comic Game Title",
-                      style: Theme.of(
-                        context,
-                      ).textTheme.displayLarge!.copyWith(color: Colors.white),
-                    ),
-                    const SizedBox(height: 12),
+                    Image.asset("assets/game_title.png", height: 500),
+
                     // Google Sign-in button
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         ElevatedButton.icon(
-                          icon: const Icon(Icons.account_circle),
+                          icon: _loading
+                              ? SizedBox.square(
+                                  dimension: 20,
+                                  child: CircularProgressIndicator(),
+                                )
+                              : _signedIn
+                              ? Icon(Icons.play_arrow)
+                              : Icon(Icons.account_circle),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.black.withValues(
                               alpha: 0.5,
@@ -511,7 +524,7 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                               : _signInAndStart,
                         ),
 
-                        if (_signedIn) SizedBox(width: 20),
+                        if (_signedIn) SizedBox(width: 10),
                         if (_signedIn)
                           IconButton(
                             icon: Icon(

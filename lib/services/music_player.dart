@@ -4,11 +4,13 @@ import 'dart:html' as html;
 
 class MusicPlayer {
   final Map<String, html.AudioElement> _cache = {};
+  final Map<String, String> _urls = {}; // id -> url (for on-demand play)
   String? _currentId;
 
   Future<void> preload(Map<String, String> musics) async {
     final futures = <Future>[];
     musics.forEach((id, url) {
+      _urls[id] = url; // remember URL for on-demand creation
       if (!_cache.containsKey(id)) {
         final audio = html.AudioElement(url)..preload = 'auto';
         // start loading
@@ -28,7 +30,16 @@ class MusicPlayer {
     if (id == null) return;
     if (_currentId == id) return; // continue playing
     stop();
-    final audio = _cache[id];
+    var audio = _cache[id];
+    // If not preloaded yet, create on-demand if we have a URL
+    if (audio == null) {
+      final url = _urls[id];
+      if (url != null && url.isNotEmpty) {
+        audio = html.AudioElement(url)..preload = 'auto';
+        audio.load();
+        _cache[id] = audio;
+      }
+    }
     if (audio == null) return;
     audio.loop = loop;
     audio.play();
