@@ -5,11 +5,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'dart:ui' as ui;
 import '../services/functions_api.dart';
 import '../services/app_state.dart';
 import '../services/music_player.dart';
+import '../services/game_data_manager.dart';
 import 'package:video_player/video_player.dart';
 import 'comic_viewer_page.dart';
 import '../route_observer.dart';
@@ -24,7 +24,7 @@ class CodeEntryPage extends StatefulWidget {
 class _CodeEntryPageState extends State<CodeEntryPage>
     with SingleTickerProviderStateMixin, RouteAware {
   final _ctrl = TextEditingController();
-  String? _error;
+  // String? _error; // no longer used
   bool _loading = false;
   final _api = FunctionsApi();
   // Google sign-in state
@@ -32,7 +32,7 @@ class _CodeEntryPageState extends State<CodeEntryPage>
   final GoogleSignIn _googleSignIn = GoogleSignIn();
   bool _signedIn = false;
   String? _userName;
-  String? _userEmail;
+  // String? _userEmail; // not displayed
   bool _isSigningIn = false;
   late final AnimationController _animController;
   VideoPlayerController? _bgVideoController;
@@ -137,7 +137,6 @@ class _CodeEntryPageState extends State<CodeEntryPage>
     try {
       setState(() {
         _isSigningIn = true;
-        _error = null;
       });
 
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
@@ -160,18 +159,19 @@ class _CodeEntryPageState extends State<CodeEntryPage>
           await _googleSignIn.signOut();
         } catch (_) {}
         if (mounted) {
-          setState(() {
-            _error = 'Failed to obtain email from Google account.';
-          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to obtain email from Google account.'),
+            ),
+          );
         }
         return;
       }
 
-      final email = emailRaw.toLowerCase();
+  // final email = emailRaw.toLowerCase();
       setState(() {
         _signedIn = true;
         _userName = user?.displayName ?? googleUser.displayName ?? '';
-        _userEmail = email;
       });
 
       // obtain ID token and call backend
@@ -188,9 +188,9 @@ class _CodeEntryPageState extends State<CodeEntryPage>
         print(st);
       }
       if (mounted) {
-        setState(() {
-          _error = 'Sign-in failed. Please try again.';
-        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sign-in failed. Please try again.')),
+        );
       }
     } finally {
       if (mounted) {
@@ -208,22 +208,10 @@ class _CodeEntryPageState extends State<CodeEntryPage>
           _loading = true;
         });
 
-        final as = Provider.of<AppState>(context, listen: false);
-
-        Map<String, dynamic> res;
-        try {
-          res = await _api.getNextFramesAuth(idToken: idToken);
-        } catch (e) {
-          if (kDebugMode) {
-            print('FunctionsApi.getNextFrames threw: $e');
-          }
-          if (mounted) {
-            setState(() {
-              _error = 'Failed to fetch game data. Try again later.';
-            });
-          }
-          return;
-        }
+  final as = Provider.of<AppState>(context, listen: false);
+  // Use bulk game data endpoint + preloader
+  final manager = GameDataManager();
+        await manager.fetchInitialData();
 
         // preload music
         try {
@@ -242,9 +230,47 @@ class _CodeEntryPageState extends State<CodeEntryPage>
           }
         }
 
-        final frames = res['frames'] as List<dynamic>? ?? [];
-        final questions = res['questions'] as List<dynamic>? ?? [];
-        final finished = res['finished'] == true;
+        final frames = manager.frames;
+        // Build questions list compatible with viewer's expectation
+        final questions = <Map<String, dynamic>>[];
+        for (final f in frames) {
+          final setId = (f['questionSetId'] ?? f['questionSet'] ?? f['setId'])
+              ?.toString();
+          if (setId == null || setId.isEmpty) {
+            questions.add({
+              'frameIndex': f['index'],
+              'setId': null,
+              'question': null,
+            });
+            continue;
+          }
+          final set = manager.questionSets[setId];
+          if (set == null) {
+            questions.add({
+              'frameIndex': f['index'],
+              'setId': setId,
+              'question': null,
+            });
+            continue;
+          }
+          // pick first question for deterministic UX; local check will use same
+          final qs = (set['questions'] as List?) ?? [];
+          Map<String, dynamic>? qObj;
+          if (qs.isNotEmpty) {
+            final q = Map<String, dynamic>.from(qs.first as Map);
+            qObj = {
+              'id': q['id']?.toString(),
+              'text': q['text']?.toString() ?? '',
+              'imageUrl': q['imageUrl'],
+            };
+          }
+          questions.add({
+            'frameIndex': f['index'],
+            'setId': setId,
+            'question': qObj,
+          });
+        }
+        final finished = manager.finished;
 
         if (!mounted) return;
         if (_bgVideoController != null) {
@@ -265,6 +291,10 @@ class _CodeEntryPageState extends State<CodeEntryPage>
                 initialFrames: frames,
                 initialQuestions: questions,
                 finished: finished,
+        startIndex: ((manager.progressIndex + 1)
+            .clamp(0, frames.isNotEmpty ? (frames.length - 1) : 0))
+          .toInt(),
+                manager: manager,
               ),
             ),
           );
@@ -275,9 +305,9 @@ class _CodeEntryPageState extends State<CodeEntryPage>
           print(st);
         }
         if (mounted) {
-          setState(() {
-            _error = 'Sign-in failed. Please try again.';
-          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Sign-in failed. Please try again.')),
+          );
         }
       } finally {
         if (mounted) {
@@ -313,7 +343,7 @@ class _CodeEntryPageState extends State<CodeEntryPage>
       setState(() {
         _signedIn = false;
         _userName = null;
-        _userEmail = null;
+  // _userEmail = null;
       });
     }
   }

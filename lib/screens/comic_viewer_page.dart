@@ -8,6 +8,7 @@ import '../services/functions_api.dart';
 import '../services/music_player.dart';
 import 'package:provider/provider.dart';
 import '../services/app_state.dart';
+import '../services/game_data_manager.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -16,6 +17,8 @@ class ComicViewerPage extends StatefulWidget {
   final List<dynamic> initialFrames;
   final List<dynamic> initialQuestions;
   final bool finished;
+  final GameDataManager? manager; // optional preloader/validator
+  final int? startIndex;
 
   const ComicViewerPage({
     super.key,
@@ -23,6 +26,8 @@ class ComicViewerPage extends StatefulWidget {
     required this.initialFrames,
     required this.initialQuestions,
     required this.finished,
+  this.manager,
+  this.startIndex,
   });
 
   @override
@@ -71,6 +76,11 @@ class _ComicViewerPageState extends State<ComicViewerPage>
 
     frames = List.from(widget.initialFrames);
     questions = List.from(widget.initialQuestions);
+    // Start from provided index (e.g., progressIndex+1) if valid
+    if (widget.startIndex != null) {
+      final si = widget.startIndex!.clamp(0, frames.isNotEmpty ? frames.length - 1 : 0);
+      idx = si;
+    }
     _animController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 520),
@@ -388,55 +398,67 @@ class _ComicViewerPageState extends State<ComicViewerPage>
     );
 
     if (result == true) {
-      // show non-dismissible checking dialog
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (c) => const AlertDialog(
-          title: Text('Checking your answer'),
-          content: SizedBox(
-            height: 60,
-            child: Center(child: CircularProgressIndicator()),
-          ),
-        ),
-      );
-
-      try {
-        // Use Firebase ID token for authenticated submit
-        final user = FirebaseAuth.instance.currentUser;
-        final idToken = (user != null) ? await user.getIdToken() : null;
-        final res = await _api.submitAnswer(
-          idToken: idToken,
-          questionSetId: qForFrame['setId'],
-          questionId: question['id'].toString(),
-          answer: answerCtrl.text.trim(),
+      final answerText = answerCtrl.text.trim();
+      final setId = qForFrame['setId']?.toString() ?? '';
+      final qId = question['id'].toString();
+      final manager = widget.manager;
+      bool correct = false;
+      if (manager != null) {
+        correct = manager.isAnswerCorrect(
+          questionSetId: setId,
+          questionId: qId,
+          userAnswer: answerText,
         );
-
-        // close checking dialog
+        // Fire-and-forget server submit to persist progress
+        manager.submitAnswerNonBlocking(
+          questionSetId: setId,
+          questionId: qId,
+          answer: answerText,
+        );
+      } else {
+        // Fallback: call server synchronously
         try {
-          Navigator.of(context).pop();
-        } catch (_) {}
-
-        // detailed logging for debugging
-        print('submitAnswer response: $res');
-
-        if (res['success'] == true && res['correct'] == true) {
-          // show success dialog
-          await showDialog<void>(
-            context: context,
-            barrierDismissible: true,
-            builder: (c) => AlertDialog(
-              title: const Text('Correct!'),
-              content: const Text('Your answer is correct.'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(c).pop(),
-                  child: const Text('Continue'),
-                ),
-              ],
-            ),
+          final user = FirebaseAuth.instance.currentUser;
+          final idToken = (user != null) ? await user.getIdToken() : null;
+          final res = await _api.submitAnswer(
+            idToken: idToken,
+            questionSetId: setId,
+            questionId: qId,
+            answer: answerText,
           );
-          // show a non-dismissible loading dialog while fetching new frames
+          correct = res['success'] == true && res['correct'] == true;
+        } catch (e) {
+          correct = false;
+        }
+      }
+
+      if (correct) {
+        // success dialog then refetch frames
+        await showDialog<void>(
+          context: context,
+          barrierDismissible: true,
+          builder: (c) => AlertDialog(
+            title: const Text('Correct!'),
+            content: const Text('Your answer is correct.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(c).pop(),
+                child: const Text('Continue'),
+              ),
+            ],
+          ),
+        );
+        if (widget.manager != null) {
+          // Advance immediately in local sequence
+          if (idx < frames.length - 1) {
+            _animateTo(idx + 1, 1);
+          } else {
+            setState(() {
+              _showFinishedScreen = true;
+            });
+          }
+        } else {
+          // small loading while we refetch next frames/questions
           showDialog<void>(
             context: context,
             barrierDismissible: false,
@@ -451,43 +473,28 @@ class _ComicViewerPageState extends State<ComicViewerPage>
           try {
             await _refetchFrames();
           } finally {
-            // close the loading dialog
             try {
               Navigator.of(context).pop();
             } catch (_) {}
           }
-        } else {
-          // incorrect or failure
-          print('submitAnswer returned not-correct or failed: $res');
-          if (mounted) {
-            await showDialog<void>(
-              context: context,
-              barrierDismissible: true,
-              builder: (c) => AlertDialog(
-                title: const Text('Incorrect'),
-                content: const Text('Your answer was incorrect.'),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(c).pop(),
-                    child: const Text('OK'),
-                  ),
-                ],
-              ),
-            );
-          }
         }
-      } catch (e, st) {
-        // close checking dialog
-        try {
-          Navigator.of(context).pop();
-        } catch (_) {}
-        // log detailed error on console
-        print('ComicViewerPage.submit exception: $e');
-        print(st);
-        if (mounted)
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      } else {
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            barrierDismissible: true,
+            builder: (c) => AlertDialog(
+              title: const Text('Incorrect'),
+              content: const Text('Your answer was incorrect.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(c).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
       }
     }
 
@@ -628,12 +635,21 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                   child: Stack(
                     children: [
                       Center(
-                        child: Image.network(
-                          imageUrl,
-                          key: imageKey,
-                          fit: BoxFit.contain,
-                          frameBuilder:
-                              (context, child, frame, wasSynchronouslyLoaded) {
+                        child: Builder(
+                          builder: (ctx) {
+                            final bytes = widget.manager?.getImageBytes(imageUrl);
+                            if (bytes != null) {
+                              return Image.memory(
+                                bytes,
+                                key: imageKey,
+                                fit: BoxFit.contain,
+                              );
+                            }
+                            return Image.network(
+                              imageUrl,
+                              key: imageKey,
+                              fit: BoxFit.contain,
+                              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
                                 if (wasSynchronouslyLoaded) return child;
                                 if (frame == null) {
                                   return Center(
@@ -649,6 +665,8 @@ class _ComicViewerPageState extends State<ComicViewerPage>
                                 }
                                 return child;
                               },
+                            );
+                          },
                         ),
                       ),
                       // integrate page number into the page container (looks like part of the page)
@@ -1446,12 +1464,20 @@ class _AnimatedElementState extends State<_AnimatedElement>
     return Transform(
       transform: _current,
       alignment: Alignment.center,
-      child: Image.network(
-        widget.element['imageUrl'] as String? ?? '',
-        width: displayW,
-        height: displayH,
-        fit: BoxFit.contain,
-      ),
+      child: Builder(builder: (ctx) {
+        final url = widget.element['imageUrl'] as String? ?? '';
+        final bytes = (context.findAncestorWidgetOfExactType<ComicViewerPage>()?.manager)
+            ?.getImageBytes(url);
+        if (bytes != null) {
+          return Image.memory(bytes, width: displayW, height: displayH, fit: BoxFit.contain);
+        }
+        return Image.network(
+          url,
+          width: displayW,
+          height: displayH,
+          fit: BoxFit.contain,
+        );
+      }),
     );
   }
 }

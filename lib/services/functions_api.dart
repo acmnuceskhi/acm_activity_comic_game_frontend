@@ -8,17 +8,20 @@ class FunctionsApi {
   final String getMusicLibraryUrl;
   final String fetchConfigUrl;
   final String resetProgressUrl;
+  final String getGameDataUrl;
 
   FunctionsApi({
     String? getNextUrl,
     String? submitUrl,
     String? fetchConfigUrl,
     String? resetProgressUrl,
+  String? getGameDataUrl,
   }) : getNextUrl = getNextUrl ?? Config.getNextFramesUrl,
        submitUrl = submitUrl ?? Config.submitAnswerUrl,
        getMusicLibraryUrl = Config.getMusicLibraryUrl,
        fetchConfigUrl = fetchConfigUrl ?? Config.fetchConfigUrl,
-       resetProgressUrl = resetProgressUrl ?? Config.resetProgressUrl;
+     resetProgressUrl = resetProgressUrl ?? Config.resetProgressUrl,
+     getGameDataUrl = getGameDataUrl ?? Config.getGameDataUrl;
 
   Future<Map<String, dynamic>> getNextFrames(String code) async {
     final uri = Uri.parse(getNextUrl).replace(queryParameters: {'code': code});
@@ -155,6 +158,26 @@ class FunctionsApi {
       return jsonDecode(r.body) as Map<String, dynamic>;
     } catch (e, st) {
       print('FunctionsApi.resetProgress exception: $e');
+      print(st);
+      rethrow;
+    }
+  }
+
+  // Bulk game data fetch: frames + questionSets + progress
+  Future<Map<String, dynamic>> getGameData({required String idToken}) async {
+    final uri = Uri.parse(getGameDataUrl);
+    try {
+      final headers = <String, String>{'Authorization': 'Bearer $idToken'};
+      final r = await http.get(uri, headers: headers);
+      if (r.statusCode != 200) {
+        print('FunctionsApi.getGameData ERROR: HTTP ${r.statusCode}');
+        print('URL: $uri');
+        print('Response body: ${r.body}');
+        throw Exception('getGameData failed: HTTP ${r.statusCode}');
+      }
+      return jsonDecode(r.body) as Map<String, dynamic>;
+    } catch (e, st) {
+      print('FunctionsApi.getGameData exception: $e');
       print(st);
       rethrow;
     }

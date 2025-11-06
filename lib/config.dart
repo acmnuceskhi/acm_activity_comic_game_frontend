@@ -8,4 +8,7 @@ class Config {
   static const fetchConfigUrl = 'https://fetchconfig-3aggrzznma-uc.a.run.app';
   static const resetProgressUrl =
       'https://resetprogress-3aggrzznma-uc.a.run.app';
+    // New bulk endpoint (auth required)
+    static const getGameDataUrl =
+            'https://getgamedata-3aggrzznma-uc.a.run.app';
 }
