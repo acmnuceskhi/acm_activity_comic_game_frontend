@@ -238,30 +238,7 @@ class _ComicViewerPageState extends State<ComicViewerPage>
         ],
       ),
     );
-    if (first != true) return false;
-
-    // second, stronger confirmation
-    final second = await showDialog<bool?>(
-      context: context,
-      barrierDismissible: true,
-      builder: (c) => AlertDialog(
-        title: const Text('Confirm go back'),
-        content: const Text(
-          'Returning will discard any unsaved progress. Continue?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(c).pop(false),
-            child: const Text('No'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(c).pop(true),
-            child: const Text('Confirm'),
-          ),
-        ],
-      ),
-    );
-    return second == true;
+    return first == true;
   }
 
   Future<void> _handleBack() async {

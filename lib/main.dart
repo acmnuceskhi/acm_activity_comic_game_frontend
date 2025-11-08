@@ -22,7 +22,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Comic Game',
+      title: 'Legendary ProblemSet',
       theme: ThemeData(
         colorScheme: ColorScheme.light(primary: Colors.yellow[800]!),
       ),
